@@ -1,7 +1,10 @@
 [build]
 builder = "NIXPACKS"
-# One root install (workspaces + dev deps for Vite). postinstall builds assets — no nested npm install.
-buildCommand = "npm install --include=dev"
+# Install all workspaces (incl. frontend devDeps for Vite), then build — never during postinstall.
+buildCommand = "npm install --include=dev && npm run build"
+
+[build.variables]
+NPM_CONFIG_PRODUCTION = "false"
 
 [deploy]
 startCommand = "npm start"

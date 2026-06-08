@@ -17,7 +17,7 @@
     "postinstall": "node scripts/postinstall.js",
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "build": "node scripts/postinstall.js",
+    "build": "node scripts/build-monorepo.js",
     "build:frontend": "npm run build --prefix frontend",
     "build:admin": "npm run build --prefix admin-panel",
     "build:verifier": "npm run build --prefix verifier-api",
