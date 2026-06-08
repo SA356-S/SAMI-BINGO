@@ -37,7 +37,7 @@ const {
   REPO_ROOT,
 } = require('./startup/monorepoOrchestrator');
 
-const PORT = Number(process.env.PORT) || 3001;
+const PORT = process.env.PORT || 8080;
 
 const FRONTEND_ORIGINS = (
   process.env.CORS_ORIGIN ||
@@ -152,7 +152,7 @@ async function start() {
   });
 
   server.listen(PORT, () => {
-    console.log(`[server] EDIL BINGO backend listening on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
     console.log(`[server] CORS origins: ${FRONTEND_ORIGINS.join(', ')}`);
     console.log(`[server] Lobby game id: ${gameManager.getLobbySession().gameId}`);
     startVerifierApiProcess();
