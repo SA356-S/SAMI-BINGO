@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment (never commit secrets)
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+admin-panel/.env
+verifier-api/.env
+
+# Build output
+dist/
+build/
+**/dist/
+**/build/
+.vite/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime / cache
+.cache/
+.temp/
+tmp/
+*.pid
+*.seed
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# User uploads (runtime data)
+backend/public/uploads/**
+!backend/public/uploads/.gitkeep
+
+# Local tooling
+.ngrok/
+terminals/

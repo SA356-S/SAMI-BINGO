@@ -1,0 +1,69 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply m-0 min-h-[100dvh] font-sans antialiased;
+    background-color: theme('colors.theme-navy');
+    font-family: 'Poppins', 'Inter', system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+
+  #root {
+    @apply min-h-[100dvh] w-full max-w-[100vw] overflow-x-hidden;
+  }
+}
+
+@layer utilities {
+  .touch-manipulation {
+    touch-action: manipulation;
+  }
+
+  .safe-bottom {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+  }
+
+  .horizontal-scroll-touch {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .horizontal-scroll-touch::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Card selection — subtle dark scrollbar */
+.cartel-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cartel-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.cartel-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+/* Bottom cartel boards — never scroll, hide any scrollbar */
+.board-static {
+  overflow: visible;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.board-static::-webkit-scrollbar {
+  display: none;
+}
