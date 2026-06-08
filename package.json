@@ -4,6 +4,12 @@
   "description": "EDIL BINGO - 75-ball real-time Bingo Telegram Mini App",
   "private": true,
   "main": "server.js",
+  "workspaces": [
+    "backend",
+    "frontend",
+    "admin-panel",
+    "verifier-api"
+  ],
   "engines": {
     "node": ">=18"
   },

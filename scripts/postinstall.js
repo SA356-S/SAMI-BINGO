@@ -1,31 +1,39 @@
 #!/usr/bin/env node
 /**
- * Monorepo install — runs on `npm install` at repo root (Railway + local).
- * Installs all packages; builds production assets when deploying.
+ * Monorepo postinstall — runs after a single root `npm install` (npm workspaces).
+ * Builds production assets only. Never runs nested `npm install`.
  */
 const { execSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 
-function run(label, command, cwd = ROOT, extraEnv = {}) {
+function run(label, command, extraEnv = {}) {
   console.log(`\n[postinstall] ${label}`);
   execSync(command, {
-    cwd,
+    cwd: ROOT,
     stdio: 'inherit',
     env: { ...process.env, ...extraEnv },
     shell: true,
   });
 }
 
-function tryRun(label, command, cwd = ROOT, extraEnv = {}) {
+function tryRun(label, command, extraEnv = {}) {
   try {
-    run(label, command, cwd, extraEnv);
+    run(label, command, extraEnv);
     return true;
   } catch (err) {
     console.warn(`[postinstall] ${label} failed (continuing):`, err?.message || err);
     return false;
   }
+}
+
+function workspaceReady() {
+  return (
+    fs.existsSync(path.join(ROOT, 'node_modules')) ||
+    fs.existsSync(path.join(ROOT, 'frontend', 'node_modules'))
+  );
 }
 
 function shouldBuildAssets() {
@@ -37,28 +45,33 @@ function shouldBuildAssets() {
   return false;
 }
 
+function runProductionBuilds() {
+  tryRun('verifier-api build', 'npm run build -w verifier-api');
+  run('frontend build', 'npm run build -w frontend');
+  run('admin-panel build', 'npm run build -w admin-panel', {
+    VITE_BASE_PATH: process.env.VITE_BASE_PATH || '/admin/',
+  });
+}
+
 try {
-  run('backend dependencies', 'npm install --prefix backend');
-
-  if (shouldBuildAssets()) {
-    tryRun('verifier-api dependencies', 'npm install --prefix verifier-api');
-    tryRun('verifier-api build', 'npm run build --prefix verifier-api');
-
-    run('frontend dependencies', 'npm install --prefix frontend');
-    run('frontend build', 'npm run build --prefix frontend');
-
-    run('admin-panel dependencies', 'npm install --prefix admin-panel');
-    run(
-      'admin-panel build',
-      'npm run build --prefix admin-panel',
-      ROOT,
-      { VITE_BASE_PATH: process.env.VITE_BASE_PATH || '/admin/' }
+  if (!shouldBuildAssets()) {
+    console.log(
+      '[postinstall] skipping production builds (local dev). Set BUILD_MONOREPO=true to build.'
     );
-  } else {
-    console.log('[postinstall] skipping asset builds (set BUILD_MONOREPO=true or deploy on Railway to build)');
+    console.log('[postinstall] monorepo install complete');
+    process.exit(0);
   }
 
-  console.log('\n[postinstall] monorepo install complete');
+  if (!workspaceReady()) {
+    console.error(
+      '[postinstall] workspace dependencies missing. Run `npm install --include=dev` at repo root.'
+    );
+    process.exit(1);
+  }
+
+  console.log('[postinstall] production build — workspace deps only, no nested npm install');
+  runProductionBuilds();
+  console.log('\n[postinstall] monorepo production build complete');
 } catch (err) {
   console.error('[postinstall] failed:', err?.message || err);
   process.exit(1);
