@@ -50,6 +50,7 @@ async function handleInstructionCommand(ctx) {
 function registerInstructionHandlers(bot) {
   bot.action('menu:instruction', handleInstructionAction);
   bot.command('instruction', handleInstructionCommand);
+  bot.command('instructions', handleInstructionCommand);
 }
 
 module.exports = {

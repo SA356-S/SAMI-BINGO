@@ -87,6 +87,7 @@ async function handleFallbackCommand(ctx) {
       await require('./inviteHandler').handleInviteCommand(ctx);
       return true;
     case 'instruction':
+    case 'instructions':
       await require('./instructionHandler').handleInstructionCommand(ctx);
       return true;
     case 'support':
