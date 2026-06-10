@@ -280,233 +280,494 @@ function scrapeTelebirrReceipt(html: string): TelebirrReceipt {
     };
 }
 
-/**
- * Parses Telebirr receipt data from JSON response
- * @param jsonData The JSON data from the proxy endpoint
- * @returns Extracted Telebirr receipt data
- */
-function parseTelebirrJson(jsonData: any): TelebirrReceipt | null {
-    try {
-        // Check if the response has the expected structure
-        if (!jsonData || !jsonData.success || !jsonData.data) {
-            logger.warn("Invalid JSON structure from proxy endpoint", { jsonData });
-            return null;
-        }
+const PRIMARY_RECEIPT_URL = 'https://transactioninfo.ethiotelecom.et/receipt/';
+const FETCH_TIMEOUT_MS = Number(
+    process.env.TELEBIRR_FETCH_TIMEOUT_MS ||
+    process.env.VERIFIER_API_TIMEOUT_MS ||
+    90000
+);
+const MAX_FETCH_RETRIES = Math.max(0, Number(process.env.TELEBIRR_FETCH_RETRIES ?? 2));
+const SUCCESS_KEYWORDS = /\b(success|successful|paid|transaction|confirmed|completed|settled)\b/i;
+const DEFAULT_FALLBACK_PROXY_URLS = ['https://leul.et/verify.php?reference='];
 
-        const data = jsonData.data;
+const TELEBIRR_HTTP_HEADERS = {
+    Accept: 'text/html,application/xhtml+xml,application/xml,application/json,text/plain,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+};
 
-        return {
-            payerName: data.payerName || "",
-            payerTelebirrNo: data.payerTelebirrNo || "",
-            creditedPartyName: data.creditedPartyName || "",
-            creditedPartyAccountNo: data.creditedPartyAccountNo || "",
-            transactionStatus: data.transactionStatus || "",
-            receiptNo: data.receiptNo || "",
-            paymentDate: data.paymentDate || "",
-            settledAmount: data.settledAmount || "",
-            serviceFee: data.serviceFee || "",
-            serviceFeeVAT: data.serviceFeeVAT || "",
-            totalPaidAmount: data.totalPaidAmount || "",
-            bankName: data.bankName || "",
-            customerNote: data.customerNote || ""
-        };
-    } catch (error) {
-        logger.error("Error parsing JSON from proxy endpoint", { error, jsonData });
-        return null;
-    }
-}
-
-/**
- * Fetches and processes Telebirr receipt data from the primary source (HTML)
- * @param reference The Telebirr reference number
- * @param baseUrl The base URL to fetch the receipt from
- * @returns The scraped receipt data or null if failed
- */
-async function fetchFromPrimarySource(reference: string, baseUrl: string): Promise<TelebirrReceipt | null> {
-    const url = `${baseUrl}${reference}`;
-
-    try {
-        logger.info(`Attempting to fetch Telebirr receipt from primary source: ${url}`);
-        const response = await axios.get(url, { timeout: 30000 }); // 30 second timeout to be safe
-        logger.debug(`Received response with status: ${response.status}`);
-
-        const extractedData = scrapeTelebirrReceipt(response.data);
-
-        logger.debug("Extracted data from HTML:", extractedData);
-        logger.info(`Successfully extracted Telebirr data for reference: ${reference}`, {
-            receiptNo: extractedData.receiptNo,
-            payerName: extractedData.payerName,
-            transactionStatus: extractedData.transactionStatus,
-            settledAmount: extractedData.settledAmount,
-            serviceFee: extractedData.serviceFee
-        });
-
-        return extractedData;
-    } catch (error) {
-        // Enhanced error logging with request details
-        const errorMessage = error instanceof Error ? error.message : "Unknown error";
-        const errorStack = error instanceof Error ? error.stack : undefined;
-
-        // Check if it's an Axios error to safely access response properties
-        const axiosError = error as AxiosError;
-        const responseDetails = axiosError.response ? {
-            status: axiosError.response.status,
-            statusText: axiosError.response.statusText,
-            responseData: axiosError.response.data
-        } : {};
-
-        logger.error(`Error fetching Telebirr receipt from primary source ${url}:`, {
-            error: errorMessage,
-            stack: errorStack,
-            ...responseDetails
-        });
-
-        return null;
-    }
-}
+export type TelebirrErrorCode = 'not_found' | 'network' | 'invalid_response';
 
 export class TelebirrVerificationError extends Error {
+    public code: TelebirrErrorCode;
     public details?: string;
-    constructor(message: string, details?: string) {
+
+    constructor(message: string, code: TelebirrErrorCode, details?: string) {
         super(message);
         this.name = 'TelebirrVerificationError';
+        this.code = code;
         this.details = details;
     }
 }
 
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function responseBodyToString(data: unknown): string {
+    if (data == null) return '';
+    if (typeof data === 'string') return data;
+    if (Buffer.isBuffer(data)) return data.toString('utf8');
+    if (typeof data === 'object') {
+        try {
+            return JSON.stringify(data);
+        } catch {
+            return String(data);
+        }
+    }
+    return String(data);
+}
+
+function logTelebirrRawResponse(source: string, reference: string, raw: unknown): void {
+    const text = responseBodyToString(raw);
+    const preview = text.length > 4000 ? `${text.slice(0, 4000)}…[truncated]` : text;
+    console.log('TELEBIRR RAW RESPONSE:', { source, reference, length: text.length, preview });
+    logger.info(`[Telebirr] raw response from ${source}`, {
+        reference,
+        length: text.length,
+        preview: preview.slice(0, 500),
+    });
+}
+
+function hasSuccessKeywords(raw: string): boolean {
+    return SUCCESS_KEYWORDS.test(raw);
+}
+
+function isSuccessStatusLike(status: string): boolean {
+    const s = String(status || '').trim().toLowerCase();
+    if (!s) return false;
+    return /\b(success|successful|completed|complete|paid|settled|confirmed|approved)\b/i.test(s);
+}
+
+function mapJsonFieldsToReceipt(data: Record<string, unknown>): TelebirrReceipt {
+    return {
+        payerName: String(data.payerName || ''),
+        payerTelebirrNo: String(data.payerTelebirrNo || ''),
+        creditedPartyName: String(data.creditedPartyName || ''),
+        creditedPartyAccountNo: String(data.creditedPartyAccountNo || ''),
+        transactionStatus: String(data.transactionStatus || ''),
+        receiptNo: String(data.receiptNo || ''),
+        paymentDate: String(data.paymentDate || ''),
+        settledAmount: String(data.settledAmount || ''),
+        serviceFee: String(data.serviceFee || ''),
+        serviceFeeVAT: String(data.serviceFeeVAT || ''),
+        totalPaidAmount: String(data.totalPaidAmount || data.totalAmount || ''),
+        bankName: String(data.bankName || ''),
+        customerNote: String(data.customerNote || ''),
+    };
+}
+
 /**
- * Fetches and processes Telebirr receipt data from the fallback proxy (JSON)
- * @param reference The Telebirr reference number
- * @param proxyUrl The proxy URL to fetch the receipt from
- * @returns The parsed receipt data or null if failed
+ * Parses Telebirr receipt data from JSON response (flexible shapes).
  */
+function parseTelebirrJson(jsonData: any, reference = ''): TelebirrReceipt | null {
+    try {
+        if (!jsonData || typeof jsonData !== 'object') {
+            return null;
+        }
+
+        if (jsonData.success === false && jsonData.error) {
+            logger.warn('Proxy JSON reported failure', { error: jsonData.error });
+            return null;
+        }
+
+        if (typeof jsonData.html === 'string' && jsonData.html.length > 0) {
+            return parseTelebirrResponse(jsonData.html, reference);
+        }
+
+        if (jsonData.data && typeof jsonData.data === 'object') {
+            const receipt = mapJsonFieldsToReceipt(jsonData.data);
+            if (isValidReceipt(receipt)) return receipt;
+            if (hasSuccessKeywords(JSON.stringify(jsonData.data))) {
+                return normalizePartialReceipt(receipt, reference);
+            }
+        }
+
+        if (jsonData.receiptNo || jsonData.settledAmount || jsonData.payerName || jsonData.transactionStatus) {
+            const receipt = mapJsonFieldsToReceipt(jsonData);
+            if (isValidReceipt(receipt)) return receipt;
+        }
+
+        return null;
+    } catch (error) {
+        logger.error('Error parsing JSON from proxy endpoint', { error, jsonData });
+        return null;
+    }
+}
+
+function normalizePartialReceipt(receipt: TelebirrReceipt, reference: string): TelebirrReceipt {
+    const normalized = { ...receipt };
+
+    if (!normalized.receiptNo && reference) {
+        normalized.receiptNo = reference;
+    }
+
+    if (!normalized.transactionStatus && (normalized.settledAmount || normalized.totalPaidAmount)) {
+        normalized.transactionStatus = 'Successful';
+    } else if (!normalized.transactionStatus) {
+        normalized.transactionStatus = 'Confirmed';
+    }
+
+    if (!normalized.settledAmount && normalized.totalPaidAmount) {
+        normalized.settledAmount = normalized.totalPaidAmount;
+    }
+
+    return normalized;
+}
+
+function buildReceiptFromKeywords(raw: string, reference: string): TelebirrReceipt | null {
+    if (!hasSuccessKeywords(raw)) {
+        return null;
+    }
+
+    const scraped = scrapeTelebirrReceipt(raw);
+    if (isValidReceipt(scraped, raw)) {
+        return normalizePartialReceipt(scraped, reference);
+    }
+
+    const settledAmount = extractSettledAmountRegex(raw) || '';
+    const receiptNo = extractReceiptNoRegex(raw) || reference;
+    const paymentDate = extractDateRegex(raw) || '';
+
+    if (!settledAmount && !receiptNo) {
+        return null;
+    }
+
+    return normalizePartialReceipt(
+        {
+            payerName: scraped.payerName || '',
+            payerTelebirrNo: scraped.payerTelebirrNo || '',
+            creditedPartyName: scraped.creditedPartyName || '',
+            creditedPartyAccountNo: scraped.creditedPartyAccountNo || '',
+            transactionStatus: scraped.transactionStatus || 'Successful',
+            receiptNo,
+            paymentDate,
+            settledAmount,
+            serviceFee: scraped.serviceFee || '',
+            serviceFeeVAT: scraped.serviceFeeVAT || '',
+            totalPaidAmount: scraped.totalPaidAmount || settledAmount,
+            bankName: scraped.bankName || '',
+            customerNote: scraped.customerNote || '',
+        },
+        reference
+    );
+}
+
+/**
+ * Unified parser for HTML, JSON, or plain-text Telebirr responses.
+ */
+function parseTelebirrResponse(raw: unknown, reference: string): TelebirrReceipt | null {
+    const text = responseBodyToString(raw).trim();
+    if (!text) {
+        return null;
+    }
+
+    if (text.startsWith('{') || text.startsWith('[')) {
+        try {
+            const json = JSON.parse(text);
+            const fromJson = parseTelebirrJson(json, reference);
+            if (fromJson && isValidReceipt(fromJson, text)) {
+                return normalizePartialReceipt(fromJson, reference);
+            }
+        } catch {
+            // Not JSON — continue with HTML/text parsing
+        }
+    }
+
+    const scraped = scrapeTelebirrReceipt(text);
+    if (isValidReceipt(scraped, text)) {
+        return normalizePartialReceipt(scraped, reference);
+    }
+
+    const keywordReceipt = buildReceiptFromKeywords(text, reference);
+    if (keywordReceipt && isValidReceipt(keywordReceipt, text)) {
+        return keywordReceipt;
+    }
+
+    return null;
+}
+
+function isValidReceipt(receipt: TelebirrReceipt, rawHint?: string): boolean {
+    const hasAmount = Boolean(
+        String(receipt.settledAmount || '').trim() || String(receipt.totalPaidAmount || '').trim()
+    );
+    const hasReceipt = Boolean(String(receipt.receiptNo || '').trim());
+    const hasPayer = Boolean(String(receipt.payerName || '').trim());
+    const hasStatus = isSuccessStatusLike(receipt.transactionStatus);
+    const keywordOk = rawHint ? hasSuccessKeywords(rawHint) : false;
+
+    if (hasAmount && (hasReceipt || hasPayer || hasStatus)) return true;
+    if (hasReceipt && (hasAmount || hasStatus || keywordOk)) return true;
+    if (hasStatus && (hasAmount || hasReceipt)) return true;
+    if (keywordOk && hasAmount) return true;
+
+    return false;
+}
+
+function getFallbackProxies(): string[] {
+    const envProxies = (process.env.FALLBACK_PROXIES || '')
+        .split(',')
+        .map((url) => url.trim())
+        .filter((url) => url.length > 0);
+
+    if (envProxies.length > 0) {
+        return envProxies;
+    }
+
+    return DEFAULT_FALLBACK_PROXY_URLS;
+}
+
+function isNetworkAxiosError(error: AxiosError): boolean {
+    const code = String(error.code || '').toUpperCase();
+    return (
+        code === 'ETIMEDOUT' ||
+        code === 'ECONNABORTED' ||
+        code === 'ECONNREFUSED' ||
+        code === 'ENOTFOUND' ||
+        code === 'EAI_AGAIN' ||
+        /timeout|network/i.test(String(error.message || ''))
+    );
+}
+
+async function axiosGetWithRetries(url: string, source: string, reference: string) {
+    let lastNetworkError: AxiosError | null = null;
+
+    for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt++) {
+        try {
+            if (attempt > 0) {
+                logger.warn(`[Telebirr] retry ${attempt}/${MAX_FETCH_RETRIES} for ${source}`, {
+                    reference,
+                    url,
+                });
+                await sleep(1200 * attempt);
+            }
+
+            const response = await axios.get(url, {
+                timeout: FETCH_TIMEOUT_MS,
+                headers: TELEBIRR_HTTP_HEADERS,
+                responseType: 'text',
+                transformResponse: [(data) => data],
+                validateStatus: (status) => status >= 200 && status < 500,
+            });
+
+            logTelebirrRawResponse(source, reference, response.data);
+
+            if (response.status === 404) {
+                return { kind: 'not_found' as const, data: response.data };
+            }
+
+            if (response.status >= 400) {
+                return { kind: 'invalid_response' as const, data: response.data, status: response.status };
+            }
+
+            return { kind: 'ok' as const, data: response.data, status: response.status };
+        } catch (error) {
+            const axiosError = error as AxiosError;
+            if (isNetworkAxiosError(axiosError)) {
+                lastNetworkError = axiosError;
+                logger.warn(`[Telebirr] network error on ${source} attempt ${attempt + 1}`, {
+                    reference,
+                    message: axiosError.message,
+                    code: axiosError.code,
+                });
+                continue;
+            }
+
+            throw error;
+        }
+    }
+
+    if (lastNetworkError) {
+        throw new TelebirrVerificationError(
+            'Telebirr verification timed out or network is unreachable.',
+            'network',
+            lastNetworkError.message
+        );
+    }
+
+    throw new TelebirrVerificationError('Telebirr verification request failed.', 'network');
+}
+
+type FetchAttemptResult =
+    | { kind: 'ok'; data: unknown; status: number }
+    | { kind: 'not_found'; data: unknown }
+    | { kind: 'invalid_response'; data: unknown; status: number };
+
+async function fetchFromPrimarySource(reference: string, baseUrl: string): Promise<TelebirrReceipt | null> {
+    const url = `${baseUrl}${reference}`;
+    logger.info(`Attempting to fetch Telebirr receipt from primary source: ${url}`);
+
+    const result: FetchAttemptResult = await axiosGetWithRetries(url, 'primary', reference);
+
+    if (result.kind === 'not_found') {
+        logger.warn(`[Telebirr] primary source returned 404 for ${reference}`);
+        return null;
+    }
+
+    if (result.kind === 'invalid_response') {
+        logger.warn(`[Telebirr] primary source returned HTTP ${result.status} for ${reference}`);
+        const parsedAnyway = parseTelebirrResponse(result.data, reference);
+        if (parsedAnyway) return parsedAnyway;
+        return null;
+    }
+
+    const parsed = parseTelebirrResponse(result.data, reference);
+    if (parsed) {
+        logger.info(`Successfully extracted Telebirr data from primary source for ${reference}`, {
+            receiptNo: parsed.receiptNo,
+            payerName: parsed.payerName,
+            transactionStatus: parsed.transactionStatus,
+            settledAmount: parsed.settledAmount,
+        });
+        return parsed;
+    }
+
+    logger.warn(`[Telebirr] primary source response could not be parsed for ${reference}`);
+    return null;
+}
+
 async function fetchFromProxySource(reference: string, proxyUrl: string): Promise<TelebirrReceipt | null> {
     const proxyKey = process.env.TELEBIRR_PROXY_KEY || '';
     const url = `${proxyUrl}${reference}${proxyKey ? `&key=${proxyKey}` : ''}`;
 
     try {
-        logger.info(`Attempting to fetch Telebirr receipt from proxy: ${url}`);
-        const response = await axios.get(url, {
-            timeout: 30000,
-            headers: {
-                'Accept': 'application/json',
-                'User-Agent': 'VerifierAPI/1.0'
-            }
-        });
+        logger.info(`Attempting to fetch Telebirr receipt from proxy: ${proxyUrl}`);
+        const result = await axiosGetWithRetries(url, `proxy:${proxyUrl}`, reference);
 
-        logger.debug(`Received proxy response with status: ${response.status}`);
+        if (result.kind === 'not_found') {
+            return null;
+        }
 
-        // Check if response is JSON
-        let data = response.data;
-        if (typeof data === 'string') {
+        const raw = result.data;
+        const text = responseBodyToString(raw);
+
+        if (text.trim().startsWith('{')) {
             try {
-                data = JSON.parse(data);
-            } catch (e) {
-                logger.warn("Proxy response is not valid JSON, attempting to scrape as HTML");
-                return scrapeTelebirrReceipt(response.data);
+                const json = JSON.parse(text);
+                if (json?.success === false && json?.error) {
+                    logger.warn(`Proxy returned explicit error: ${json.error}`);
+                    return null;
+                }
+            } catch {
+                // fall through to unified parser
             }
         }
 
-        if (data && data.success === false && data.error) {
-            logger.error(`Proxy returned explicit error: ${data.error}`);
-            throw new TelebirrVerificationError(data.error, data.details);
+        const parsed = parseTelebirrResponse(raw, reference);
+        if (parsed) {
+            logger.info(`Successfully verified using proxy: ${proxyUrl}`, {
+                receiptNo: parsed.receiptNo,
+                settledAmount: parsed.settledAmount,
+            });
+            return parsed;
         }
 
-        const extractedData = parseTelebirrJson(data);
-        if (!extractedData) {
-            logger.warn("Failed to parse JSON from proxy, attempting to scrape as HTML");
-            return scrapeTelebirrReceipt(response.data);
-        }
-
-        logger.debug("Extracted data from JSON:", extractedData);
-        logger.info(`Successfully extracted Telebirr data from proxy for reference: ${reference}`, {
-            receiptNo: extractedData.receiptNo,
-            payerName: extractedData.payerName,
-            transactionStatus: extractedData.transactionStatus
-        });
-
-        return extractedData;
+        logger.warn(`[Telebirr] proxy response could not be parsed: ${proxyUrl}`);
+        return null;
     } catch (error) {
-        if (error instanceof Error && error.name === 'TelebirrVerificationError') {
+        if (error instanceof TelebirrVerificationError) {
             throw error;
         }
 
-        const axiosError = error as AxiosError;
-        if (axiosError.code === 'ETIMEDOUT' || axiosError.code === 'ECONNABORTED' || axiosError.code === 'ECONNREFUSED') {
-            const detailMsg = axiosError.message;
-            throw new TelebirrVerificationError("The fallback proxy server (leul.et) is unreachable or timed out.", detailMsg);
-        }
-
-        const errorMessage = error instanceof Error ? error.message : "Unknown error";
-        const errorStack = error instanceof Error ? error.stack : undefined;
-
-        const responseDetails = axiosError.response ? {
-            status: axiosError.response.status,
-            statusText: axiosError.response.statusText,
-            responseData: axiosError.response.data
-        } : {};
-
         logger.error(`Error fetching Telebirr receipt from proxy ${url}:`, {
-            error: errorMessage,
-            stack: errorStack,
-            ...responseDetails
+            error: error instanceof Error ? error.message : String(error),
         });
-
         return null;
+    }
+}
+
+export function telebirrErrorHttpStatus(code: TelebirrErrorCode): number {
+    switch (code) {
+        case 'network':
+            return 504;
+        case 'invalid_response':
+            return 422;
+        case 'not_found':
+        default:
+            return 404;
     }
 }
 
 export async function verifyTelebirr(reference: string): Promise<TelebirrReceipt | null> {
-    const primaryUrl = "https://transactioninfo.ethiotelecom.et/receipt/";
+    const trimmedRef = String(reference || '').trim();
+    if (!trimmedRef) {
+        throw new TelebirrVerificationError('Telebirr reference is required.', 'invalid_response');
+    }
 
-
-    const envProxies = process.env.FALLBACK_PROXIES || "";
-    const fallbackProxies = envProxies.split(',')
-        .map(url => url.trim())
-        .filter(url => url.length > 0);
-    const skipPrimary = process.env.SKIP_PRIMARY_VERIFICATION === "true";
+    const fallbackProxies = getFallbackProxies();
+    const skipPrimary = process.env.SKIP_PRIMARY_VERIFICATION === 'true';
+    let sawInvalidResponse = false;
+    let sawNetworkError = false;
+    let networkMessage = '';
 
     if (!skipPrimary) {
-        logger.info(`Attempting primary verification for: ${reference}`);
-        const primaryResult = await fetchFromPrimarySource(reference, primaryUrl);
-
-        if (primaryResult && isValidReceipt(primaryResult)) {
-            return primaryResult;
+        logger.info(`Attempting primary verification for: ${trimmedRef}`);
+        try {
+            const primaryResult = await fetchFromPrimarySource(trimmedRef, PRIMARY_RECEIPT_URL);
+            if (primaryResult) {
+                return primaryResult;
+            }
+            sawInvalidResponse = true;
+        } catch (error) {
+            if (error instanceof TelebirrVerificationError && error.code === 'network') {
+                sawNetworkError = true;
+                networkMessage = error.message;
+            } else {
+                throw error;
+            }
         }
         logger.warn(`Primary verification failed. Moving to fallback proxy pool...`);
     } else {
-        logger.info(`Skipping primary verifier (SKIP_PRIMARY_VERIFICATION=true).`);
-    }
-
-    if (fallbackProxies.length === 0 && skipPrimary) {
-        logger.error("CRITICAL: Primary check skipped, but no FALLBACK_PROXIES defined in .env!");
-        return null;
+        logger.info('Skipping primary verifier (SKIP_PRIMARY_VERIFICATION=true).');
     }
 
     for (const proxyUrl of fallbackProxies) {
         try {
-            logger.info(`Attempting verification with proxy: ${proxyUrl}`);
-            const fallbackResult = await fetchFromProxySource(reference, proxyUrl);
-
-            if (fallbackResult && isValidReceipt(fallbackResult)) {
-                logger.info(`Successfully verified using proxy: ${proxyUrl}`);
+            const fallbackResult = await fetchFromProxySource(trimmedRef, proxyUrl);
+            if (fallbackResult) {
                 return fallbackResult;
             }
+            sawInvalidResponse = true;
         } catch (error) {
-            logger.warn(`Proxy ${proxyUrl} failed or timed out. Trying next...`);
+            if (error instanceof TelebirrVerificationError && error.code === 'network') {
+                sawNetworkError = true;
+                networkMessage = error.message;
+                logger.warn(`Proxy ${proxyUrl} network failure. Trying next...`);
+                continue;
+            }
+            logger.warn(`Proxy ${proxyUrl} failed. Trying next...`, {
+                error: error instanceof Error ? error.message : String(error),
+            });
         }
     }
 
-    logger.error(`All primary and proxy verification methods failed for reference: ${reference}`);
-    return null;
-}
+    if (sawNetworkError && !sawInvalidResponse) {
+        throw new TelebirrVerificationError(
+            networkMessage || 'Telebirr verification timed out or network is unreachable.',
+            'network'
+        );
+    }
 
-// Add this helper function to validate receipt data
-function isValidReceipt(receipt: TelebirrReceipt): boolean {
-    // Check if essential fields have values
-    return Boolean(
-        receipt.receiptNo &&
-        receipt.payerName &&
-        receipt.transactionStatus
+    if (sawInvalidResponse) {
+        throw new TelebirrVerificationError(
+            'Telebirr returned a response that could not be parsed into a receipt.',
+            'invalid_response'
+        );
+    }
+
+    throw new TelebirrVerificationError(
+        `Telebirr receipt not found for reference: ${trimmedRef}`,
+        'not_found'
     );
 }

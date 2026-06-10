@@ -1,6 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { verifyCBE } from '../services/verifyCBE';
-import { verifyTelebirr } from '../services/verifyTelebirr';
+import {
+    verifyTelebirr,
+    TelebirrVerificationError,
+    telebirrErrorHttpStatus,
+} from '../services/verifyTelebirr';
 import { verifyDashen } from '../services/verifyDashen';
 import { verifyAbyssinia } from '../services/verifyAbyssinia';
 import { verifyCBEBirr } from '../services/verifyCBEBirr';
@@ -126,10 +130,6 @@ router.post('/', async (req: Request<{}, {}, UniversalVerifyBody>, res: Response
             } else {
                 // Telebirr Verification (No phone number provided)
                 const result = await verifyTelebirr(trimmedRef);
-                if (!result) {
-                    res.status(404).json({ success: false, error: 'Receipt not found or could not be processed.' });
-                    return;
-                }
                 res.json({ success: true, data: result });
                 return;
             }
@@ -142,11 +142,12 @@ router.post('/', async (req: Request<{}, {}, UniversalVerifyBody>, res: Response
     } catch (err: any) {
         logger.error("💥 Universal verification failed:", err);
 
-        if (err.name === 'TelebirrVerificationError') {
-            res.status(502).json({
+        if (err instanceof TelebirrVerificationError) {
+            res.status(telebirrErrorHttpStatus(err.code)).json({
                 success: false,
                 error: err.message,
-                details: err.details
+                code: err.code,
+                details: err.details,
             });
             return;
         }
