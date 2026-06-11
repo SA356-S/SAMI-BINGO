@@ -1,9 +1,5 @@
 import { Router, Request, Response } from 'express';
-import {
-    verifyTelebirr,
-    TelebirrVerificationError,
-    telebirrErrorHttpStatus,
-} from '../services/verifyTelebirr';
+import { verifyTelebirr } from '../services/verifyTelebirr';
 import logger from '../utils/logger';
 
 const router = Router();
@@ -24,24 +20,27 @@ router.post<{}, {}, VerifyTelebirrRequestBody>(
 
         try {
             const result = await verifyTelebirr(reference);
+            if (!result) {
+                res.status(404).json({ success: false, error: 'Receipt not found or could not be processed.' });
+                return;
+            }
             res.json({ success: true, data: result });
         } catch (err: any) {
             logger.error('Telebirr verification error:', err);
 
-            if (err instanceof TelebirrVerificationError) {
-                res.status(telebirrErrorHttpStatus(err.code)).json({
+            if (err.name === 'TelebirrVerificationError') {
+                res.status(502).json({
                     success: false,
                     error: err.message,
-                    code: err.code,
-                    details: err.details,
+                    details: err.details
                 });
                 return;
             }
 
-            res.status(500).json({
-                success: false,
+            res.status(500).json({ 
+                success: false, 
                 error: 'Server error verifying Telebirr receipt.',
-                message: err instanceof Error ? err.message : 'Unknown error',
+                message: err instanceof Error ? err.message : 'Unknown error'
             });
         }
     }
