@@ -2,73 +2,6 @@ import axios, { AxiosError } from "axios";
 import * as cheerio from "cheerio";
 import logger from '../utils/logger';
 
-const TELEBIRR_DEBUG_BODY_PREVIEW_LEN = 1000;
-
-function telebirrBodyPreview(data: unknown): string {
-    if (data == null) return '';
-    let text = '';
-    if (typeof data === 'string') {
-        text = data;
-    } else if (Buffer.isBuffer(data)) {
-        text = data.toString('utf8');
-    } else if (typeof data === 'object') {
-        try {
-            text = JSON.stringify(data);
-        } catch {
-            text = String(data);
-        }
-    } else {
-        text = String(data);
-    }
-    if (text.length <= TELEBIRR_DEBUG_BODY_PREVIEW_LEN) return text;
-    return `${text.slice(0, TELEBIRR_DEBUG_BODY_PREVIEW_LEN)}…[truncated]`;
-}
-
-function telebirrHeadersPreview(headers: unknown): Record<string, unknown> {
-    if (!headers || typeof headers !== 'object') return {};
-    return { ...(headers as Record<string, unknown>) };
-}
-
-function classifyTelebirrRequestFailure(error: AxiosError): {
-    outcome: 'timeout' | 'blocked' | 'error' | 'unknown';
-    errorCode: string;
-    errorMessage: string;
-} {
-    const errorCode = String(error.code || error.response?.status || 'UNKNOWN');
-    const errorMessage = error.message || 'Unknown error';
-
-    if (
-        error.code === 'ETIMEDOUT' ||
-        error.code === 'ECONNABORTED' ||
-        /timeout/i.test(errorMessage)
-    ) {
-        return { outcome: 'timeout', errorCode, errorMessage };
-    }
-
-    if (
-        error.response?.status === 403 ||
-        error.response?.status === 451 ||
-        error.code === 'ECONNREFUSED' ||
-        error.code === 'ENOTFOUND'
-    ) {
-        return { outcome: 'blocked', errorCode, errorMessage };
-    }
-
-    if (error.response || error.code) {
-        return { outcome: 'error', errorCode, errorMessage };
-    }
-
-    return { outcome: 'unknown', errorCode, errorMessage };
-}
-
-function logTelebirrDebug(payload: Record<string, unknown>): void {
-    console.log('===== TELEBIRR DEBUG START =====');
-    for (const [key, value] of Object.entries(payload)) {
-        console.log(`[TELEBIRR DEBUG] ${key}:`, value);
-    }
-    console.log('===== TELEBIRR DEBUG END =====');
-}
-
 export interface TelebirrReceipt {
     payerName: string;
     payerTelebirrNo: string;
@@ -397,19 +330,6 @@ async function fetchFromPrimarySource(reference: string, baseUrl: string): Promi
         const response = await axios.get(url, { timeout: 30000 }); // 30 second timeout to be safe
         logger.debug(`Received response with status: ${response.status}`);
 
-        logTelebirrDebug({
-            phase: 'primary_response',
-            reference,
-            requestUrl: url,
-            httpStatus: response.status,
-            responseHeaders: telebirrHeadersPreview(response.headers),
-            bodyPreview: telebirrBodyPreview(response.data),
-            requestOutcome: 'success',
-            errorCode: null,
-            errorMessage: null,
-            fallbackProxyTriggered: false,
-        });
-
         const extractedData = scrapeTelebirrReceipt(response.data);
 
         logger.debug("Extracted data from HTML:", extractedData);
@@ -429,25 +349,11 @@ async function fetchFromPrimarySource(reference: string, baseUrl: string): Promi
 
         // Check if it's an Axios error to safely access response properties
         const axiosError = error as AxiosError;
-        const failure = classifyTelebirrRequestFailure(axiosError);
         const responseDetails = axiosError.response ? {
             status: axiosError.response.status,
             statusText: axiosError.response.statusText,
             responseData: axiosError.response.data
         } : {};
-
-        logTelebirrDebug({
-            phase: 'primary_failure',
-            reference,
-            requestUrl: url,
-            httpStatus: axiosError.response?.status ?? null,
-            responseHeaders: telebirrHeadersPreview(axiosError.response?.headers),
-            bodyPreview: telebirrBodyPreview(axiosError.response?.data),
-            requestOutcome: failure.outcome,
-            errorCode: failure.errorCode,
-            errorMessage: failure.errorMessage,
-            fallbackProxyTriggered: false,
-        });
 
         logger.error(`Error fetching Telebirr receipt from primary source ${url}:`, {
             error: errorMessage,
@@ -490,19 +396,6 @@ async function fetchFromProxySource(reference: string, proxyUrl: string): Promis
 
         logger.debug(`Received proxy response with status: ${response.status}`);
 
-        logTelebirrDebug({
-            phase: 'fallback_proxy_response',
-            reference,
-            fallbackProxyTriggered: true,
-            fallbackProxyUrl: url,
-            httpStatus: response.status,
-            responseHeaders: telebirrHeadersPreview(response.headers),
-            bodyPreview: telebirrBodyPreview(response.data),
-            requestOutcome: 'success',
-            errorCode: null,
-            errorMessage: null,
-        });
-
         // Check if response is JSON
         let data = response.data;
         if (typeof data === 'string') {
@@ -515,17 +408,6 @@ async function fetchFromProxySource(reference: string, proxyUrl: string): Promis
         }
 
         if (data && data.success === false && data.error) {
-            logTelebirrDebug({
-                phase: 'fallback_proxy_explicit_error',
-                reference,
-                fallbackProxyTriggered: true,
-                fallbackProxyUrl: url,
-                httpStatus: response.status,
-                bodyPreview: telebirrBodyPreview(response.data),
-                requestOutcome: 'error',
-                errorCode: 'PROXY_EXPLICIT_ERROR',
-                errorMessage: String(data.error),
-            });
             logger.error(`Proxy returned explicit error: ${data.error}`);
             throw new TelebirrVerificationError(data.error, data.details);
         }
@@ -550,21 +432,6 @@ async function fetchFromProxySource(reference: string, proxyUrl: string): Promis
         }
 
         const axiosError = error as AxiosError;
-        const failure = classifyTelebirrRequestFailure(axiosError);
-
-        logTelebirrDebug({
-            phase: 'fallback_proxy_failure',
-            reference,
-            fallbackProxyTriggered: true,
-            fallbackProxyUrl: url,
-            httpStatus: axiosError.response?.status ?? null,
-            responseHeaders: telebirrHeadersPreview(axiosError.response?.headers),
-            bodyPreview: telebirrBodyPreview(axiosError.response?.data),
-            requestOutcome: failure.outcome,
-            errorCode: failure.errorCode,
-            errorMessage: failure.errorMessage,
-        });
-
         if (axiosError.code === 'ETIMEDOUT' || axiosError.code === 'ECONNABORTED' || axiosError.code === 'ECONNREFUSED') {
             const detailMsg = axiosError.message;
             throw new TelebirrVerificationError("The fallback proxy server (leul.et) is unreachable or timed out.", detailMsg);
@@ -599,16 +466,6 @@ export async function verifyTelebirr(reference: string): Promise<TelebirrReceipt
         .filter(url => url.length > 0);
     const skipPrimary = process.env.SKIP_PRIMARY_VERIFICATION === "true";
 
-    logTelebirrDebug({
-        phase: 'verify_start',
-        reference,
-        nodeEnv: process.env.NODE_ENV || 'unknown',
-        skipPrimaryVerification: skipPrimary,
-        fallbackProxyConfigured: fallbackProxies.length > 0,
-        fallbackProxyUrls: fallbackProxies,
-        primaryRequestUrl: `${primaryUrl}${reference}`,
-    });
-
     if (!skipPrimary) {
         logger.info(`Attempting primary verification for: ${reference}`);
         const primaryResult = await fetchFromPrimarySource(reference, primaryUrl);
@@ -616,36 +473,12 @@ export async function verifyTelebirr(reference: string): Promise<TelebirrReceipt
         if (primaryResult && isValidReceipt(primaryResult)) {
             return primaryResult;
         }
-
-        logTelebirrDebug({
-            phase: 'primary_rejected',
-            reference,
-            fallbackProxyTriggered: fallbackProxies.length > 0,
-            primaryHadResult: Boolean(primaryResult),
-            primaryReceiptNo: primaryResult?.receiptNo || null,
-            primaryPayerName: primaryResult?.payerName || null,
-            primaryTransactionStatus: primaryResult?.transactionStatus || null,
-            primaryPassedValidation: Boolean(primaryResult && isValidReceipt(primaryResult)),
-        });
-
         logger.warn(`Primary verification failed. Moving to fallback proxy pool...`);
     } else {
-        logTelebirrDebug({
-            phase: 'primary_skipped',
-            reference,
-            fallbackProxyTriggered: fallbackProxies.length > 0,
-            skipPrimaryVerification: true,
-        });
         logger.info(`Skipping primary verifier (SKIP_PRIMARY_VERIFICATION=true).`);
     }
 
     if (fallbackProxies.length === 0 && skipPrimary) {
-        logTelebirrDebug({
-            phase: 'fallback_unavailable',
-            reference,
-            fallbackProxyTriggered: false,
-            errorMessage: 'Primary skipped but FALLBACK_PROXIES is empty',
-        });
         logger.error("CRITICAL: Primary check skipped, but no FALLBACK_PROXIES defined in .env!");
         return null;
     }
@@ -653,42 +486,16 @@ export async function verifyTelebirr(reference: string): Promise<TelebirrReceipt
     for (const proxyUrl of fallbackProxies) {
         try {
             logger.info(`Attempting verification with proxy: ${proxyUrl}`);
-            const proxyKey = process.env.TELEBIRR_PROXY_KEY || '';
-            logTelebirrDebug({
-                phase: 'fallback_proxy_attempt',
-                reference,
-                fallbackProxyTriggered: true,
-                fallbackProxyUrl: `${proxyUrl}${reference}${proxyKey ? `&key=${proxyKey}` : ''}`,
-            });
             const fallbackResult = await fetchFromProxySource(reference, proxyUrl);
 
             if (fallbackResult && isValidReceipt(fallbackResult)) {
                 logger.info(`Successfully verified using proxy: ${proxyUrl}`);
                 return fallbackResult;
             }
-
-            logTelebirrDebug({
-                phase: 'fallback_proxy_rejected',
-                reference,
-                fallbackProxyTriggered: true,
-                fallbackProxyUrl: proxyUrl,
-                fallbackHadResult: Boolean(fallbackResult),
-                fallbackReceiptNo: fallbackResult?.receiptNo || null,
-                fallbackPayerName: fallbackResult?.payerName || null,
-                fallbackTransactionStatus: fallbackResult?.transactionStatus || null,
-                fallbackPassedValidation: Boolean(fallbackResult && isValidReceipt(fallbackResult)),
-            });
         } catch (error) {
             logger.warn(`Proxy ${proxyUrl} failed or timed out. Trying next...`);
         }
     }
-
-    logTelebirrDebug({
-        phase: 'verify_failed',
-        reference,
-        fallbackProxyTriggered: fallbackProxies.length > 0,
-        errorMessage: 'All primary and proxy verification methods failed',
-    });
 
     logger.error(`All primary and proxy verification methods failed for reference: ${reference}`);
     return null;
