@@ -56,6 +56,50 @@ function attachPlayerIdentity(session, socket, payload = {}) {
   }
 }
 
+async function deliverEndedGameWinnerToSocket(
+  session,
+  io,
+  socket,
+  reason = 'late-join',
+  { includeAudio = true } = {}
+) {
+  if (!session || !socket || session.status !== 'ended' || !session.winner) {
+    return null;
+  }
+
+  const winnerPayload =
+    session.winnerDisplayPayload ??
+    (await session.buildWinnerAnnouncementPayloadForDisplay(session.winner));
+
+  const winnerUserId =
+    winnerPayload?.winners?.[0]?.userId ??
+    session.winner?.userId ??
+    null;
+
+  console.info('[game][bingo-announce] Delivering ended-game winner to socket', {
+    gameId: session.gameId,
+    roomId: session.roomName,
+    socketId: socket.id,
+    winnerUserId,
+    reason,
+    includeAudio,
+  });
+
+  socket.emit('game:winner', winnerPayload);
+  socket.emit('game:over', winnerPayload);
+  socket.emit('game:ended', winnerPayload);
+  if (includeAudio) {
+    socket.emit('bingo_announce', {
+      gameId: session.gameId,
+      serverTime: Date.now(),
+      primaryCartelId: winnerPayload.primaryCartelId,
+      cartelId: winnerPayload.primaryCartelId,
+    });
+  }
+
+  return winnerPayload;
+}
+
 /**
  * Socket.io handlers for EDIL BINGO — game events + dual-wallet management.
  * Emits wallet:update after connect, deposit, and Bingo wins.
@@ -356,6 +400,7 @@ function registerSocketHandlers(io) {
 
       if (inProgress) {
         session.emitActiveGameSync(io, socket, joinUserId);
+        await deliverEndedGameWinnerToSocket(session, io, socket, 'game:join');
       } else {
         const state = session.toPublicState(socket.id, joinUserId);
         socket.emit('game:joined', {
@@ -699,22 +744,34 @@ function registerSocketHandlers(io) {
         (session.status === 'ended' && session.resetTimer);
 
       const state = session.toPublicState(socket.id, watchUserId);
-      const response = {
-        ok: true,
-        watchingOnly: true,
-        gameStatus: session.getPublicGameStatus(),
-        selectionLocked: true,
-        gameInProgress: session.status === 'calling',
-        hasActiveGame: inProgress,
-        canRejoin: false,
-        ...state,
-      };
+      const response = inProgress
+        ? {
+            ok: true,
+            watchingOnly: true,
+            gameStatus: session.getPublicGameStatus(),
+            selectionLocked: true,
+            gameInProgress: session.status === 'calling',
+            hasActiveGame: true,
+            canRejoin: false,
+            ...session.buildActiveGameSyncPayload(socket.id, watchUserId),
+          }
+        : {
+            ok: true,
+            watchingOnly: true,
+            gameStatus: session.getPublicGameStatus(),
+            selectionLocked: true,
+            gameInProgress: session.status === 'calling',
+            hasActiveGame: inProgress,
+            canRejoin: false,
+            ...state,
+          };
 
       if (inProgress) {
         session.emitActiveGameSync(io, socket, watchUserId);
         if (session.status === 'calling') {
           session.ensureBallCaller(io);
         }
+        await deliverEndedGameWinnerToSocket(session, io, socket, 'game:watch');
       }
 
       if (typeof ack === 'function') ack(response);
@@ -766,7 +823,7 @@ function registerSocketHandlers(io) {
       session.emitPerPlayer(io, 'game:started');
     });
 
-    socket.on('game:state', (payload = {}, ack) => {
+    socket.on('game:state', async (payload = {}, ack) => {
       const gameId = payload.gameId || socket.data.gameId;
       const session = gameManager.resolveGameplaySession(gameId);
       const stateUserId = resolveUserId(socket, payload);
@@ -779,6 +836,12 @@ function registerSocketHandlers(io) {
       const inProgress =
         session.status === 'calling' ||
         (session.status === 'ended' && session.resetTimer);
+
+      if (inProgress) {
+        socket.join(session.roomName);
+        socket.data.gameId = session.gameId;
+      }
+
       const state = inProgress
         ? session.buildActiveGameSyncPayload(socket.id, stateUserId)
         : {
@@ -790,6 +853,12 @@ function registerSocketHandlers(io) {
 
       socket.emit('game:state', state);
       if (typeof ack === 'function') ack(state);
+
+      if (session.status === 'ended' && session.winner) {
+        await deliverEndedGameWinnerToSocket(session, io, socket, 'game:state', {
+          includeAudio: false,
+        });
+      }
     });
 
     socket.on('game:bingo', async (payload = {}, ack) => {
@@ -803,10 +872,9 @@ function registerSocketHandlers(io) {
       }
 
       if (session.status === 'ended') {
-        const winnerPayload = session.winner
-          ? session.winnerDisplayPayload ??
-            (await session.buildWinnerAnnouncementPayloadForDisplay(session.winner))
-          : null;
+        const winnerPayload =
+          session.winnerDisplayPayload ??
+          (await session.buildWinnerAnnouncementPayloadForDisplay(session.winner));
         if (typeof ack === 'function') {
           ack({
             ok: true,
@@ -815,8 +883,7 @@ function registerSocketHandlers(io) {
           });
         }
         if (winnerPayload) {
-          socket.emit('game:winner', winnerPayload);
-          socket.emit('game:ended', winnerPayload);
+          await deliverEndedGameWinnerToSocket(session, io, socket, 'game:bingo-already-ended');
         }
         return;
       }
@@ -1052,13 +1119,7 @@ function registerSocketHandlers(io) {
       if (typeof ack === 'function') ack(response);
       emitRoomGameUpdate(session, { lightweight: true });
 
-      if (session.status === 'ended' && session.winner) {
-        const winnerPayload =
-          session.winnerDisplayPayload ??
-          (await session.buildWinnerAnnouncementPayloadForDisplay(session.winner));
-        socket.emit('game:winner', winnerPayload);
-        socket.emit('game:ended', winnerPayload);
-      }
+      await deliverEndedGameWinnerToSocket(session, io, socket, 'game:rejoin');
     });
 
     socket.on('game:marks-update', (payload = {}) => {

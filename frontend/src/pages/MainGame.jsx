@@ -46,6 +46,7 @@ import {
 
 const GAME_ENTRY_STAKE = 10;
 const MIN_PLAYERS = 2;
+const WINNER_REVEAL_BALL_IDLE_MAX_MS = 8000;
 
 function isGenericWinnerName(name) {
   const value = String(name || '').trim();
@@ -405,8 +406,12 @@ export default function MainGame() {
         return;
       }
 
-      const cartelId = Number(payload?.primaryCartelId ?? payload?.cartelId);
-      if (!Number.isInteger(cartelId)) return;
+      let cartelId = Number(payload?.primaryCartelId ?? payload?.cartelId);
+      if (!Number.isInteger(cartelId) || cartelId < 1) {
+        const firstWinner = Array.isArray(payload?.winners) ? payload.winners[0] : null;
+        cartelId = Number(firstWinner?.cartelId);
+      }
+      if (!Number.isInteger(cartelId) || cartelId < 1) return;
 
       bingoReportedRef.current = true;
       gameWonRef.current = true;
@@ -452,6 +457,12 @@ export default function MainGame() {
         prize: payload?.prize ?? payload?.derash ?? derash,
         prizeSharePerWinner: payload?.prizeSharePerWinner,
         prizePool: payload?.prizePool,
+      });
+
+      console.info('[game][bingo-announce] Winner announcement displayed', {
+        gameId: payload?.gameId ?? gameId ?? null,
+        primaryCartelId: cartelId,
+        winnerCount: winners.length,
       });
 
       const displayMs = Math.max(
@@ -744,7 +755,12 @@ export default function MainGame() {
       syncRejoinCalledBalls(winnerBalls);
     }
 
-    await waitForBallAnnouncementIdle();
+    await Promise.race([
+      waitForBallAnnouncementIdle(),
+      new Promise((resolve) => {
+        setTimeout(resolve, WINNER_REVEAL_BALL_IDLE_MAX_MS);
+      }),
+    ]);
     await new Promise((resolve) => {
       setTimeout(resolve, BALL_REVEAL_ANIMATION_MS);
     });
@@ -760,12 +776,20 @@ export default function MainGame() {
     if (!payload || gameWonRef.current) return;
     const winnerPayload =
       payload.winnerAnnouncement ??
-      (payload.gameWon && (payload.primaryCartelId != null || payload.cartelId != null)
+      (payload.status === 'ended' &&
+      Array.isArray(payload.winners) &&
+      payload.winners.length > 0
+        ? payload
+        : null) ??
+      (payload.gameWon &&
+      (payload.primaryCartelId != null || payload.cartelId != null)
         ? payload
         : null);
     if (
       winnerPayload &&
-      (winnerPayload.primaryCartelId != null || winnerPayload.cartelId != null)
+      (winnerPayload.primaryCartelId != null ||
+        winnerPayload.cartelId != null ||
+        (Array.isArray(winnerPayload.winners) && winnerPayload.winners.length > 0))
     ) {
       revealWinnerFromServerRef.current(winnerPayload);
     }
@@ -826,10 +850,13 @@ export default function MainGame() {
       setSocketConnected(true);
       setMySocketId(socket.id);
 
+      const needsWinnerResync =
+        gameWonRef.current && !winnerAnnouncementRef.current;
+
       if (
         gameIdRef.current &&
         !ignoreGameUpdatesRef.current &&
-        !gameWonRef.current
+        (!gameWonRef.current || needsWinnerResync)
       ) {
         if (isWatchingOnly) {
           joinAsWatcher(getPlayerUserId(), gameIdRef.current).then((ack) => {

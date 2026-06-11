@@ -909,7 +909,7 @@ class GameSession {
    * Build winner splash payload (display names, prize, winning cartel, called balls).
    */
   buildWinnerAnnouncementPayload(winnerInfo = {}) {
-    const primaryCartelId = Number(
+    let primaryCartelId = Number(
       winnerInfo.primaryCartelId ?? winnerInfo.cartelId
     );
     const player = winnerInfo.socketId
@@ -963,6 +963,12 @@ class GameSession {
 
     const primaryWinner =
       winners.find((w) => Number(w.cartelId) === primaryCartelId) ?? winners[0];
+    if (!Number.isInteger(primaryCartelId) || primaryCartelId < 1) {
+      const fallbackCartelId = Number(primaryWinner?.cartelId);
+      if (Number.isInteger(fallbackCartelId) && fallbackCartelId > 0) {
+        primaryCartelId = fallbackCartelId;
+      }
+    }
     const winnerLabel = String(primaryWinner?.playerName || fallbackName || 'Player');
 
     return {
@@ -986,6 +992,54 @@ class GameSession {
       displaySeconds: ROUND_END_DISPLAY_MS / 1000,
       redirectTo: '/card-selection',
     };
+  }
+
+  countConnectedRoomClients(io) {
+    const room = io?.sockets?.adapter?.rooms?.get(this.roomName);
+    return room ? room.size : 0;
+  }
+
+  /**
+   * Broadcast winner splash + synchronized bingo audio to every socket in the room.
+   */
+  broadcastWinnerAnnouncement(io, enrichedPayload, meta = {}) {
+    if (!io || !enrichedPayload) return 0;
+
+    const recipientCount = this.countConnectedRoomClients(io);
+    const winnerUserId =
+      meta.winnerUserId ??
+      enrichedPayload?.winners?.[0]?.userId ??
+      enrichedPayload?.userId ??
+      null;
+
+    console.info('[game][bingo-announce] Winner detected', {
+      gameId: this.gameId,
+      roomId: this.roomName,
+      winnerUserId,
+      winnerSocketId: meta.winnerSocketId ?? null,
+      primaryCartelId: enrichedPayload.primaryCartelId,
+      winnerLabel: enrichedPayload.winnerLabel,
+      recipientCount,
+      trigger: meta.trigger ?? 'declareWinner',
+    });
+
+    this.emitRoomAudio(io, 'bingo_announce', {
+      primaryCartelId: enrichedPayload.primaryCartelId,
+      cartelId: enrichedPayload.primaryCartelId,
+    });
+    io.to(this.roomName).emit('game:winner', enrichedPayload);
+    io.to(this.roomName).emit('game:over', enrichedPayload);
+    io.to(this.roomName).emit('game:ended', enrichedPayload);
+
+    console.info('[game][bingo-announce] Bingo announcement sent', {
+      gameId: this.gameId,
+      roomId: this.roomName,
+      winnerUserId,
+      recipientCount,
+      events: ['bingo_announce', 'game:winner', 'game:over', 'game:ended'],
+    });
+
+    return recipientCount;
   }
 
   /**
@@ -1057,13 +1111,14 @@ class GameSession {
 
     this.winnerDisplayPayload = enrichedPayload;
 
-    this.emitRoomAudio(io, 'bingo_announce', {
-      primaryCartelId: enrichedPayload.primaryCartelId,
-      cartelId: enrichedPayload.primaryCartelId,
+    const winnerPlayer = winnerInfo.socketId
+      ? this.players.get(winnerInfo.socketId)
+      : null;
+    this.broadcastWinnerAnnouncement(io, enrichedPayload, {
+      winnerUserId: winnerPlayer?.userId ?? winnerInfo.userId ?? null,
+      winnerSocketId: winnerInfo.socketId ?? null,
+      trigger: 'declareWinner',
     });
-    io.to(this.roomName).emit('game:winner', enrichedPayload);
-    io.to(this.roomName).emit('game:over', enrichedPayload);
-    io.to(this.roomName).emit('game:ended', enrichedPayload);
 
     this.resetTimer = setTimeout(() => {
       this.resetForNewRound();
