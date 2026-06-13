@@ -39,14 +39,10 @@ import {
   syncAnnouncedBallsFromHistory,
   unlockGameAudio,
 } from '../audio/gameSounds';
-import {
-  syncGameAudioFromSnapshot,
-  waitForBallAnnouncementIdle,
-} from '../audio/gameAudioSync';
+import { syncGameAudioFromSnapshot } from '../audio/gameAudioSync';
 
 const GAME_ENTRY_STAKE = 10;
 const MIN_PLAYERS = 2;
-const WINNER_REVEAL_BALL_IDLE_MAX_MS = 8000;
 
 function isGenericWinnerName(name) {
   const value = String(name || '').trim();
@@ -280,7 +276,8 @@ export default function MainGame() {
   const ignoreGameUpdatesRef = useRef(false);
   const calledHistoryRef = useRef([]);
   const lastBallSequenceRef = useRef(0);
-  const roundEndTimerRef = useRef(null);
+  const pendingGameResetRef = useRef(null);
+  const pendingResetFallbackTimerRef = useRef(null);
   const manualMarksRef = useRef(manualMarks);
   const activeCartelsRef = useRef(activeCartels);
   const automaticRef = useRef(automatic);
@@ -444,8 +441,7 @@ export default function MainGame() {
             },
           ];
 
-      setGameWon(true);
-      setWinnerAnnouncement({
+      const announcement = {
         winners,
         primaryCartelId: cartelId,
         calledNumbers: normalizeCalledNumbers(payload).length
@@ -457,24 +453,21 @@ export default function MainGame() {
         prize: payload?.prize ?? payload?.derash ?? derash,
         prizeSharePerWinner: payload?.prizeSharePerWinner,
         prizePool: payload?.prizePool,
-      });
+      };
+
+      winnerAnnouncementRef.current = announcement;
+      if (pendingResetFallbackTimerRef.current) {
+        window.clearTimeout(pendingResetFallbackTimerRef.current);
+        pendingResetFallbackTimerRef.current = null;
+      }
+      setGameWon(true);
+      setWinnerAnnouncement(announcement);
 
       console.info('[game][bingo-announce] Winner announcement displayed', {
         gameId: payload?.gameId ?? gameId ?? null,
         primaryCartelId: cartelId,
         winnerCount: winners.length,
       });
-
-      const displayMs = Math.max(
-        1000,
-        Number(payload?.displaySeconds ?? 6) * 1000
-      );
-      if (roundEndTimerRef.current) clearTimeout(roundEndTimerRef.current);
-      roundEndTimerRef.current = setTimeout(() => {
-        exitToCardSelectionRef.current({
-          gameId: payload?.gameId ?? gameIdRef.current,
-        });
-      }, displayMs);
     },
     [
       calledHistory,
@@ -490,9 +483,10 @@ export default function MainGame() {
   applyWinnerFromServerRef.current = applyWinnerFromServer;
 
   const clearLocalGameState = useCallback(() => {
-    if (roundEndTimerRef.current) {
-      clearTimeout(roundEndTimerRef.current);
-      roundEndTimerRef.current = null;
+    pendingGameResetRef.current = null;
+    if (pendingResetFallbackTimerRef.current) {
+      window.clearTimeout(pendingResetFallbackTimerRef.current);
+      pendingResetFallbackTimerRef.current = null;
     }
     sessionCartelsRef.current = [];
     setCalledHistory([]);
@@ -528,13 +522,13 @@ export default function MainGame() {
 
   useEffect(
     () => () => {
-      if (roundEndTimerRef.current) {
-        clearTimeout(roundEndTimerRef.current);
-        roundEndTimerRef.current = null;
-      }
       if (bingoNoticeTimerRef.current) {
         clearTimeout(bingoNoticeTimerRef.current);
         bingoNoticeTimerRef.current = null;
+      }
+      if (pendingResetFallbackTimerRef.current) {
+        window.clearTimeout(pendingResetFallbackTimerRef.current);
+        pendingResetFallbackTimerRef.current = null;
       }
     },
     []
@@ -542,6 +536,47 @@ export default function MainGame() {
 
   const exitToCardSelectionRef = useRef(exitToCardSelection);
   exitToCardSelectionRef.current = exitToCardSelection;
+
+  const finishWinnerRoundExit = useCallback(() => {
+    const pending = pendingGameResetRef.current;
+    pendingGameResetRef.current = null;
+    exitToCardSelection({
+      gameId: pending?.gameId ?? gameIdRef.current ?? gameId,
+    });
+  }, [exitToCardSelection, gameId]);
+
+  const finishWinnerRoundExitRef = useRef(finishWinnerRoundExit);
+  finishWinnerRoundExitRef.current = finishWinnerRoundExit;
+
+  const deferGameResetUntilAnnouncement = useCallback((payload = {}) => {
+    const activeGameId = gameIdRef.current ?? state?.gameId;
+    const resetGameId = payload?.gameId;
+    if (
+      resetGameId &&
+      activeGameId &&
+      String(resetGameId) !== String(activeGameId)
+    ) {
+      return;
+    }
+
+    pendingGameResetRef.current = payload;
+
+    if (winnerAnnouncementRef.current) {
+      return;
+    }
+
+    if (!pendingResetFallbackTimerRef.current) {
+      pendingResetFallbackTimerRef.current = window.setTimeout(() => {
+        pendingResetFallbackTimerRef.current = null;
+        if (!winnerAnnouncementRef.current && pendingGameResetRef.current) {
+          exitToCardSelectionRef.current(pendingGameResetRef.current);
+        }
+      }, 10000);
+    }
+  }, [state?.gameId]);
+
+  const deferGameResetUntilAnnouncementRef = useRef(deferGameResetUntilAnnouncement);
+  deferGameResetUntilAnnouncementRef.current = deferGameResetUntilAnnouncement;
 
   const showNoBingoNotice = useCallback(() => {
     setBingoNotice('No Bingo');
@@ -572,10 +607,6 @@ export default function MainGame() {
           if (ack?.ok === false) {
             bingoReportedRef.current = false;
             showNoBingoNotice();
-            return;
-          }
-          if (ack?.primaryCartelId != null || ack?.cartelId != null) {
-            revealWinnerFromServerRef.current(ack);
           }
         }
       );
@@ -749,23 +780,14 @@ export default function MainGame() {
     [applyLiveBallToUI, syncRejoinCalledBalls, syncCalledHistorySilently]
   );
 
-  const revealWinnerFromServer = useCallback(async (payload) => {
+  const revealWinnerFromServer = useCallback((payload) => {
+    if (gameWonRef.current && winnerAnnouncementRef.current) return;
+
     const winnerBalls = normalizeCalledNumbers(payload);
     if (winnerBalls.length > 0) {
       syncRejoinCalledBalls(winnerBalls);
     }
 
-    await Promise.race([
-      waitForBallAnnouncementIdle(),
-      new Promise((resolve) => {
-        setTimeout(resolve, WINNER_REVEAL_BALL_IDLE_MAX_MS);
-      }),
-    ]);
-    await new Promise((resolve) => {
-      setTimeout(resolve, BALL_REVEAL_ANIMATION_MS);
-    });
-
-    if (gameWonRef.current && winnerAnnouncementRef.current) return;
     applyWinnerFromServerRef.current(payload);
   }, [syncRejoinCalledBalls]);
 
@@ -948,21 +970,11 @@ export default function MainGame() {
     };
 
     const onGameReset = (payload) => {
-      const activeGameId = gameIdRef.current ?? state?.gameId;
-      const resetGameId = payload?.gameId;
-      if (
-        resetGameId &&
-        activeGameId &&
-        String(resetGameId) !== String(activeGameId)
-      ) {
-        return;
-      }
-
-      exitToCardSelectionRef.current(payload);
+      deferGameResetUntilAnnouncementRef.current(payload);
     };
 
     const onGameRedirect = (payload) => {
-      onGameReset(payload);
+      deferGameResetUntilAnnouncementRef.current(payload);
     };
 
     const onPlayers = (payload) => {
@@ -1322,7 +1334,7 @@ export default function MainGame() {
           manualMarksByCartel={winnerAnnouncement.manualMarksByCartel}
           automatic={winnerAnnouncement.automatic}
           gameId={winnerAnnouncement.gameId}
-          onComplete={() => exitToCardSelectionRef.current()}
+          onComplete={() => finishWinnerRoundExitRef.current()}
         />
       )}
       <header className="shrink-0 px-2 pb-1.5 pt-2 sm:px-3 sm:pb-2 sm:pt-2.5">

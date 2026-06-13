@@ -1,7 +1,7 @@
 import { getSocket } from '../api/socket';
 import {
   playBallCallSoundAndWait,
-  playBingoWinSound,
+  playBingoWinSoundAfterBallsIdle,
   playCountdownTickSound,
   playGameStartSound,
   prepareGameAudioForRound,
@@ -17,6 +17,8 @@ let syncEnabled = false;
 let boundSocket = null;
 let lastBallSequence = 0;
 let activeGameId = null;
+let bingoEndAudioBusy = false;
+let deferredAudioReset = false;
 
 function matchesActiveGame(payload) {
   const incoming = payload?.gameId != null ? String(payload.gameId) : null;
@@ -54,6 +56,44 @@ function resetAudioSession() {
   resetBallSoundQueue();
   resetBingoWinSound();
   resetAnnouncedBalls();
+}
+
+function flushDeferredAudioReset() {
+  if (!deferredAudioReset || bingoEndAudioBusy) return;
+  deferredAudioReset = false;
+  resetAudioSession();
+}
+
+function scheduleAudioSessionReset() {
+  if (bingoEndAudioBusy) {
+    deferredAudioReset = true;
+    return;
+  }
+
+  void (async () => {
+    await waitForBallAnnouncementIdle();
+    if (bingoEndAudioBusy) {
+      deferredAudioReset = true;
+      return;
+    }
+    resetAudioSession();
+  })();
+}
+
+async function runBingoAnnounceAudio(payload) {
+  if (!matchesActiveGame(payload)) return;
+
+  bingoEndAudioBusy = true;
+  try {
+    console.log('[bingo-audio] bingo_announce — waiting for final ball audio to finish');
+    await playBingoWinSoundAfterBallsIdle();
+    console.log('[bingo-audio] bingo_announce — bingo sound complete');
+  } catch (err) {
+    console.log('[bingo-audio] bingo_announce sequence failed:', err?.message || err);
+  } finally {
+    bingoEndAudioBusy = false;
+    flushDeferredAudioReset();
+  }
 }
 
 function handleBallAudioEvent(payload, eventName) {
@@ -113,10 +153,7 @@ export function rebindGameAudioSync() {
     void prepareGameAudioForRound().then(() => playGameStartSound());
   };
   const onBingoAnnounce = (payload) => {
-    if (!matchesActiveGame(payload)) return;
-    void playBingoWinSound().catch((err) => {
-      console.log('[bingo-audio] bingo play failed:', err?.message || err);
-    });
+    void runBingoAnnounceAudio(payload);
   };
   const onCountdownTick = (payload) => {
     if (!matchesActiveGame(payload)) return;
@@ -124,7 +161,7 @@ export function rebindGameAudioSync() {
     if (!Number.isFinite(sec)) return;
     void playCountdownTickSound(sec);
   };
-  const onReset = () => resetAudioSession();
+  const onReset = () => scheduleAudioSessionReset();
   const onSocketConnect = () => {
     void unlockGameAudio();
   };

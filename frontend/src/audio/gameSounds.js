@@ -479,11 +479,18 @@ export function playBallCallSoundAndWait(
   });
 }
 
-/** Wait until all queued ball sounds have finished. */
+/** True while a ball-call clip is queued or actively playing (not bingo). */
+function isBallAnnouncementBusy() {
+  if (queueProcessing || ballPlayQueue.length > 0) return true;
+  if (activeAudio && activeAudio !== bingoAudio) return true;
+  return false;
+}
+
+/** Wait until all queued ball sounds have finished playing. */
 export function waitForBallAnnouncementIdle() {
   return new Promise((resolve) => {
     const poll = () => {
-      if (!queueProcessing && ballPlayQueue.length === 0) {
+      if (!isBallAnnouncementBusy()) {
         resolve();
         return;
       }
@@ -491,6 +498,12 @@ export function waitForBallAnnouncementIdle() {
     };
     poll();
   });
+}
+
+/** Let the final ball finish, then play the room bingo cue once. */
+export async function playBingoWinSoundAfterBallsIdle() {
+  await waitForBallAnnouncementIdle();
+  await playBingoWinSound();
 }
 
 function formatBallCall(num) {
