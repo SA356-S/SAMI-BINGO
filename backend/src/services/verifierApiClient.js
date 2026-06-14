@@ -3,11 +3,13 @@ const { loadEnv } = require('../config/env');
 loadEnv();
 
 const BASE_URL = (
-  process.env.VERIFIER_API_URL || 'http://localhost:3002'
+  process.env.VERIFIER_API_URL || 'http://196.189.51.146:3002'
 ).replace(/\/$/, '');
 const API_KEY = process.env.VERIFIER_API_KEY || '';
 const TIMEOUT_MS = Number(process.env.VERIFIER_API_TIMEOUT_MS) || 30000;
 const MAX_FETCH_RETRIES = Math.max(1, Number(process.env.VERIFIER_API_RETRIES) || 2);
+
+console.info('[verifierApi] configured base URL:', BASE_URL);
 
 function normalizeNetworkError(err) {
   if (err?.name === 'AbortError') return 'verifier_timeout';
@@ -58,6 +60,7 @@ async function postJson(path, body, attempt = 1) {
   }
 
   const url = `${BASE_URL}${path}`;
+  console.info('[verifierApi] request:', url);
   const headers = {
     'Content-Type': 'application/json',
     Accept: 'application/json',

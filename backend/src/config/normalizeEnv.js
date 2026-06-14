@@ -15,10 +15,8 @@ function normalizeEnv() {
     process.env.MONGO_URI = process.env.MONGODB_URI;
   }
 
-  const verifierPort = String(process.env.VERIFIER_API_PORT || '3002').trim();
-
-  if (!process.env.VERIFIER_API_URL && process.env.START_VERIFIER_API !== 'false') {
-    process.env.VERIFIER_API_URL = `http://127.0.0.1:${verifierPort}`;
+  if (!String(process.env.VERIFIER_API_URL || '').trim()) {
+    process.env.VERIFIER_API_URL = 'http://196.189.51.146:3002';
   }
 }
 
