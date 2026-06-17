@@ -16,24 +16,24 @@ function BalanceCard({ label, amount, tone }) {
 
   return (
     <article
-      className={`relative overflow-hidden rounded-2xl border px-3.5 py-3.5 ${shellClass}`}
+      className={`relative overflow-hidden rounded-2xl border px-3 py-2 ${shellClass}`}
     >
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex items-center gap-1.5">
         <span
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border ${iconShellClass}`}
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${iconShellClass}`}
         >
-          <Icon className="h-4 w-4" strokeWidth={2.25} />
+          <Icon className="h-3.5 w-3.5" strokeWidth={2.25} />
         </span>
         <p
-          className={`pt-0.5 text-[9px] font-bold uppercase tracking-[0.18em] ${labelClass}`}
+          className={`text-[8px] font-bold uppercase tracking-[0.16em] ${labelClass}`}
         >
           {label}
         </p>
       </div>
 
-      <p className="mt-4 text-[1.65rem] font-bold leading-none tracking-tight text-white">
+      <p className="mt-1.5 text-xl font-bold leading-none tracking-tight text-white">
         {amount}
-        <span className="ml-1.5 text-sm font-semibold text-slate-300">ETB</span>
+        <span className="ml-1 text-xs font-semibold text-slate-300">ETB</span>
       </p>
     </article>
   );
