@@ -1,5 +1,5 @@
 import Navbar from './Navbar';
-import { AmbientGlow } from './PageShell';
+import { AmbientGlow, HomePlayAmbientGlow } from './PageShell';
 import ScreenHeader from './ScreenHeader';
 
 /**
@@ -13,14 +13,23 @@ export default function ScreenLayout({
   headerPhone,
   headerVerified,
 }) {
-  const contentClasses =
-    contentVariant === 'fill'
+  const isHomePlay = contentVariant === 'homePlay';
+
+  const contentClasses = isHomePlay
+    ? 'items-center justify-start gap-y-5 overflow-hidden pt-1 pb-2 sm:gap-y-6 sm:pt-2'
+    : contentVariant === 'fill'
       ? 'items-stretch justify-start gap-2 overflow-hidden sm:gap-3'
       : 'items-center justify-center gap-y-4 overflow-hidden sm:gap-y-6';
 
   return (
-    <div className="relative flex h-[100dvh] max-h-[100dvh] w-full max-w-[100vw] flex-col justify-between overflow-hidden bg-theme-navy font-sans text-white">
-      <AmbientGlow />
+    <div
+      className={`relative flex h-[100dvh] max-h-[100dvh] w-full max-w-[100vw] flex-col justify-between overflow-hidden font-sans text-white ${
+        isHomePlay
+          ? 'bg-[linear-gradient(180deg,#1a0b2e_0%,#0f0a1a_38%,#0b0b1a_100%)]'
+          : 'bg-theme-navy'
+      }`}
+    >
+      {isHomePlay ? <HomePlayAmbientGlow /> : <AmbientGlow />}
 
       <ScreenHeader
         activeScreen={activeScreen}
