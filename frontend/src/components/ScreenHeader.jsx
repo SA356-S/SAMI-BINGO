@@ -51,13 +51,13 @@ export default function ScreenHeader({
       <div className="flex min-h-[40px] w-full min-w-0 items-center justify-between gap-2 sm:min-h-[42px]">
         {isHome ? (
           <>
-            <span className="truncate text-sm font-bold uppercase tracking-[0.12em] text-white sm:text-[15px] sm:tracking-[0.14em]">
+            <span className="truncate text-sm font-bold tracking-[0.14em] text-white/90 sm:text-base sm:tracking-[0.18em]">
               EDIL BINGO
             </span>
             <button
               type="button"
               onClick={() => onNavigate('rules')}
-              className="shrink-0 touch-manipulation rounded-full border border-white/[0.12] bg-[#1a1a24] px-4 py-2 text-xs font-medium text-white transition hover:border-white/25 hover:bg-[#22222e] sm:px-5 sm:py-2.5"
+              className="shrink-0 touch-manipulation rounded-full border border-white/20 bg-white/5 px-3 py-2 text-xs font-medium tracking-wide text-white/80 backdrop-blur-sm transition hover:border-white/35 hover:bg-white/10 sm:px-5 sm:py-2.5"
             >
               Rules
             </button>

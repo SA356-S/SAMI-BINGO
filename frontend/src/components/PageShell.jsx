@@ -11,20 +11,6 @@ export function AmbientGlow() {
   );
 }
 
-/** Home / Play screen background glow — matches design reference */
-export function HomePlayAmbientGlow() {
-  return (
-    <div
-      className="pointer-events-none absolute inset-0 overflow-hidden"
-      aria-hidden
-    >
-      <div className="absolute -left-16 -top-20 h-64 w-64 rounded-full bg-[#6b21a8]/25 blur-[90px]" />
-      <div className="absolute -right-24 top-1/4 h-48 w-48 rounded-full bg-[#4c1d95]/15 blur-[80px]" />
-      <div className="absolute bottom-32 left-1/3 h-40 w-40 rounded-full bg-[#1e1b4b]/30 blur-[70px]" />
-    </div>
-  );
-}
-
 export default function PageShell({ children, withNav = true, className = '' }) {
   return (
     <div

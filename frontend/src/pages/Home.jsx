@@ -130,59 +130,52 @@ export default function Home({ activeScreen, onNavigate }) {
   };
 
   return (
-    <ScreenLayout
-      activeScreen={activeScreen}
-      onNavigate={onNavigate}
-      contentVariant="homePlay"
-    >
+    <ScreenLayout activeScreen={activeScreen} onNavigate={onNavigate}>
       <section className="w-full shrink-0 text-center">
-        <p className="text-[15px] font-medium text-white sm:text-base">
-          Welcome to
-        </p>
-        <h1
-          className="mt-1 text-[2.25rem] font-extrabold leading-[1.05] tracking-tight text-[#ffd700] drop-shadow-[0_2px_18px_rgba(255,215,0,0.45)] sm:text-[2.5rem]"
-          style={{
-            textShadow:
-              '0 0 24px rgba(255, 215, 0, 0.35), 0 2px 4px rgba(0, 0, 0, 0.5)',
-          }}
-        >
-          EDIL BINGO
+        <h1 className="mx-auto max-w-[min(100%,280px)] text-[1.5rem] font-extrabold leading-[1.2] sm:text-[1.875rem]">
+          <span className="block bg-gradient-to-r from-amber-200 via-amber-400 to-amber-600 bg-clip-text text-transparent">
+            Welcome to
+          </span>
+          <span className="mt-0.5 block bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 bg-clip-text text-transparent">
+            EDIL BINGO
+          </span>
         </h1>
       </section>
 
-      <div className="w-full max-w-[min(100%,320px)] shrink-0 rounded-[1.35rem] border border-white/[0.08] bg-[#12121c]/95 px-5 py-7 shadow-[0_12px_40px_rgba(0,0,0,0.55)] sm:px-6 sm:py-8">
-        <p className="text-center text-[10px] font-semibold tracking-[0.22em] text-white/85">
+      <div className="w-full max-w-sm shrink-0 rounded-3xl border border-white/[0.08] bg-white/[0.04] px-5 py-8 shadow-[0_0_40px_rgba(16,185,129,0.08),0_8px_32px_rgba(0,0,0,0.5)] backdrop-blur-md sm:px-8 sm:py-10">
+        <p className="text-center text-[11px] font-semibold tracking-[0.2em] text-white/70">
           CHOOSE YOUR STAKE
         </p>
 
-        <div className="relative my-5 h-px w-full sm:my-6">
-          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-amber-400/70 to-transparent" />
-          <div className="absolute inset-0 blur-[2px] bg-gradient-to-r from-transparent via-orange-400/50 to-transparent" />
+        <div className="relative my-6 h-px w-full">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-emerald-400/60 to-transparent" />
+          <div className="absolute inset-0 blur-sm bg-gradient-to-r from-transparent via-emerald-300/40 to-transparent" />
         </div>
 
         <button
           type="button"
           onClick={handlePlay10}
           disabled={isEntering}
-          className="flex min-h-[50px] w-full touch-manipulation items-center justify-center gap-2.5 rounded-2xl bg-[#00c853] px-4 py-3.5 text-[15px] font-bold tracking-wide text-[#0a0f1d] shadow-[0_8px_28px_rgba(0,200,83,0.45)] transition active:scale-[0.98] disabled:opacity-60 sm:min-h-[52px] sm:text-base"
+          className="group relative flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 overflow-hidden rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 px-4 py-3.5 text-sm font-bold tracking-wide text-white shadow-[0_4px_24px_rgba(16,185,129,0.45)] transition active:scale-[0.98] hover:shadow-[0_6px_32px_rgba(16,185,129,0.55)] disabled:opacity-60 sm:py-4 sm:text-base"
         >
+          <span className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 opacity-0 transition group-hover:opacity-100" />
           <Play
-            className="h-5 w-5 shrink-0 fill-[#0a0f1d] text-[#0a0f1d]"
+            className="relative h-5 w-5 shrink-0 fill-white"
             strokeWidth={0}
           />
-          <span className="whitespace-nowrap">
+          <span className="relative whitespace-nowrap">
             {isEntering ? 'CHECKING…' : 'PLAY 10'}
           </span>
         </button>
 
-        <div className="mt-7 text-center sm:mt-8">
+        <div className="mt-8 border-t border-white/[0.06] pt-6 text-center">
           <p className="text-[10px] font-medium tracking-[0.2em] text-white/45">
             WALLET BALANCE
           </p>
-          <p className="mt-2 text-[2rem] font-bold tabular-nums leading-none text-white sm:text-[2.125rem]">
+          <p className="mt-1.5 text-2xl font-bold tabular-nums leading-none text-white sm:text-3xl">
             {walletLoading ? '…' : totalBalance}
           </p>
+          <p className="mt-1 text-[9px] text-white/30">Main + Play wallet (ETB)</p>
         </div>
       </div>
     </ScreenLayout>
