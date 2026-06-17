@@ -17,6 +17,7 @@ const { registerInstructionHandlers } = require('./bot/handlers/instructionHandl
 const { registerSupportHandlers } = require('./bot/handlers/supportHandler');
 const { getMiniAppUrl, validateMiniAppUrl } = require('./config/miniAppUrl');
 const { syncTelegramProfileFromClient } = require('./services/telegramUserService');
+const { registrationGateMiddleware } = require('./bot/registrationGate');
 
 loadEnv();
 require('./config/paymentMethods').getPaymentMethods();
@@ -51,6 +52,8 @@ function createBot() {
     }
     return next();
   });
+
+  bot.use(registrationGateMiddleware);
 
   /** Commands (/start, /help, etc.) — message updates only. */
   registerCommandHandlers(bot);

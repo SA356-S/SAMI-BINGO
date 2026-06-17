@@ -4,6 +4,8 @@ const { handlePlayCommand } = require('./playHandler');
 const { handleDepositCommand } = require('./depositHandler');
 const { handleWithdrawCommand } = require('./withdrawHandler');
 const { processStartReferral } = require('../../services/referralService');
+const { findByTelegramId, isRegistered } = require('../../services/telegramUserService');
+const { beginRegistration } = require('./registerHandler');
 
 const HELP_MESSAGE = [
   '📖 Edil Bingo Bot Help',
@@ -34,7 +36,14 @@ const BOT_COMMANDS = [
 
 async function handleStartCommand(ctx) {
   await processStartReferral(ctx).catch(() => {});
-  await ctx.reply(WELCOME_MESSAGE, welcomeReply());
+
+  const user = await findByTelegramId(ctx.from?.id);
+  if (isRegistered(user)) {
+    await ctx.reply(WELCOME_MESSAGE, welcomeReply());
+    return;
+  }
+
+  await beginRegistration(ctx);
 }
 
 async function handleHelpCommand(ctx) {

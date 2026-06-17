@@ -7,6 +7,8 @@ const {
 const {
   contactRequestKeyboard,
   removeKeyboardExtra,
+  WELCOME_MESSAGE,
+  welcomeReply,
 } = require('../keyboards');
 
 const REGISTER_PROMPT =
@@ -91,6 +93,7 @@ async function handleContactShare(ctx) {
   }
 
   await ctx.reply(SUCCESS_MESSAGE, removeKeyboardExtra());
+  await ctx.reply(WELCOME_MESSAGE, welcomeReply());
 }
 
 function registerRegistrationHandlers(bot) {
@@ -108,4 +111,8 @@ function registerRegistrationHandlers(bot) {
   });
 }
 
-module.exports = { registerRegistrationHandlers };
+module.exports = {
+  registerRegistrationHandlers,
+  beginRegistration,
+  REGISTER_PROMPT,
+};
