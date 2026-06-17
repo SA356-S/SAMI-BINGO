@@ -1,60 +1,25 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowDownLeft, ArrowUpRight } from 'lucide-react';
-import ScreenLayout from '../components/ScreenLayout';
+import Navbar from '../components/Navbar';
 import { fetchWalletPage, subscribeWalletPage } from '../api/wallet';
 import { getPlayerUserId } from '../api/playerIdentity';
-
-function TransactionRow({ item }) {
-  const isWithdraw = item.type === 'withdraw';
-
-  return (
-    <li className="flex items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-3">
-      <span
-        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-          isWithdraw ? 'bg-orange-500/15' : 'bg-emerald-500/15'
-        }`}
-      >
-        {isWithdraw ? (
-          <ArrowUpRight className="h-5 w-5 text-orange-400" strokeWidth={2} />
-        ) : (
-          <ArrowDownLeft className="h-5 w-5 text-emerald-400" strokeWidth={2} />
-        )}
-      </span>
-
-      <div className="min-w-0 flex-1">
-        <p
-          className={`text-xs font-bold tracking-wide ${
-            isWithdraw ? 'text-orange-400' : 'text-emerald-400'
-          }`}
-        >
-          {item.title}
-        </p>
-        <p className="mt-1 text-[11px] font-medium text-white/60">
-          {item.detail}
-        </p>
-        <p className="mt-0.5 text-[10px] text-white/40">{item.date}</p>
-      </div>
-
-      <p
-        className={`shrink-0 pt-0.5 text-sm font-bold tabular-nums ${
-          isWithdraw ? 'text-orange-400' : 'text-emerald-400'
-        }`}
-      >
-        {isWithdraw ? '' : '+'}
-        {item.amount} ETB
-      </p>
-    </li>
-  );
-}
+import WalletPageHeader from './wallet/WalletPageHeader';
+import WalletBalanceSection from './wallet/WalletBalanceSection';
+import WalletTransactionRow from './wallet/WalletTransactionRow';
 
 export default function Wallet({ activeScreen, onNavigate }) {
   const [transactions, setTransactions] = useState([]);
+  const [mainWallet, setMainWallet] = useState(0);
+  const [playWallet, setPlayWallet] = useState(0);
+  const [totalAvailable, setTotalAvailable] = useState(0);
   const [phone, setPhone] = useState('');
   const [verified, setVerified] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const applyPage = useCallback((page) => {
     setTransactions(page.transactions);
+    setMainWallet(page.mainWallet ?? 0);
+    setPlayWallet(page.playWallet ?? 0);
+    setTotalAvailable(page.totalAvailable ?? page.totalWalletBalance ?? 0);
     setPhone(page.phone ?? '');
     setVerified(page.verified === true);
     setLoading(false);
@@ -92,41 +57,63 @@ export default function Wallet({ activeScreen, onNavigate }) {
   }, [applyPage, refreshWallet]);
 
   return (
-    <ScreenLayout
-      activeScreen={activeScreen}
-      onNavigate={onNavigate}
-      contentVariant="fill"
-      headerPhone={phone}
-      headerVerified={verified}
-    >
-      <div className="flex min-h-0 w-full flex-1 flex-col gap-3 overflow-hidden">
-        {/* Recent activity */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <p className="mb-2 shrink-0 text-[10px] font-semibold tracking-[0.2em] text-white/45">
-            RECENT ACTIVITY
-          </p>
+    <div className="relative flex h-[100dvh] max-h-[100dvh] w-full max-w-[100vw] flex-col overflow-hidden bg-[#0a0b14] font-sans text-white">
+      <div
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+        aria-hidden
+      >
+        <div className="absolute -left-10 top-0 h-48 w-48 rounded-full bg-violet-900/20 blur-[80px]" />
+        <div className="absolute right-0 top-24 h-40 w-40 rounded-full bg-emerald-900/15 blur-[70px]" />
+      </div>
+
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col px-3 pt-3 sm:px-4 sm:pt-4">
+        <WalletPageHeader phone={phone} verified={verified} />
+
+        <WalletBalanceSection
+          mainWallet={mainWallet}
+          playWallet={playWallet}
+          totalAvailable={totalAvailable}
+          loading={loading}
+        />
+
+        <section className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="mb-2.5 flex shrink-0 items-center justify-between border-b border-white/[0.06] pb-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+              RECENT ACTIVITY
+            </p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-300">
+              {loading ? '…' : `${transactions.length} TOTAL`}
+            </p>
+          </div>
+
           {loading ? (
-            <p className="py-6 text-center text-sm text-white/35">
+            <p className="py-8 text-center text-sm font-medium text-slate-400">
               Loading activity…
             </p>
           ) : transactions.length === 0 ? (
-            <p className="py-6 text-center text-sm text-white/35">
+            <p className="py-8 text-center text-sm font-medium text-slate-400">
               No transactions yet.
             </p>
           ) : (
-            <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <ul className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto overscroll-contain pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {transactions.map((item) => (
-                <TransactionRow key={item.id} item={item} />
+                <WalletTransactionRow key={item.id} item={item} />
               ))}
             </ul>
           )}
-        </div>
+        </section>
 
-        {/* Footer note */}
-        <p className="shrink-0 pb-1 text-center text-[9px] leading-snug tracking-wide text-white/30">
+        <p className="shrink-0 py-2 text-center text-[9px] font-medium uppercase leading-snug tracking-[0.12em] text-slate-500">
           MANAGE YOUR FUNDS IN THE TELEGRAM BOT CHAT
         </p>
       </div>
-    </ScreenLayout>
+
+      <div
+        className="shrink-0 h-[calc(2.75rem+env(safe-area-inset-bottom,0px))] sm:h-[3rem]"
+        aria-hidden="true"
+      />
+
+      <Navbar activeScreen={activeScreen} onNavigate={onNavigate} embedded />
+    </div>
   );
 }
