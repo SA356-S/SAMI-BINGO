@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Crown, Star, Trophy } from 'lucide-react';
 import { generateBingoCard } from '../utils/bingoCard';
 import { getCartelMarkedKeys, getWinningLineCellKeys } from '../utils/bingoWin';
@@ -230,17 +231,17 @@ export default function WinnerAnnouncement({
   const hiddenCount = Math.max(0, orderedWinners.length - visibleWinners.length);
   const totalWinners = orderedWinners.length;
 
-  return (
-    <div className="winner-overlay fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto overscroll-contain px-3 py-5 sm:px-4 sm:py-6">
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  const overlay = (
+    <div className="winner-overlay fixed left-0 top-0 z-[99999] flex h-[100dvh] w-[100vw] items-center justify-center overflow-y-auto overscroll-contain px-3 py-5 sm:px-4 sm:py-6">
       <style>{`
-        @keyframes winnerOverlayIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        @keyframes winnerBackdropGlow {
-          0%, 100% { opacity: 0.85; }
-          50% { opacity: 1; }
-        }
         @keyframes winnerPanelIn {
           0% { opacity: 0; transform: scale(0.92) translateY(16px); }
           100% { opacity: 1; transform: scale(1) translateY(0); }
@@ -270,21 +271,21 @@ export default function WinnerAnnouncement({
           to { transform: scaleX(1); }
         }
         .winner-overlay {
-          animation: winnerOverlayIn 0.3s ease-out forwards;
           pointer-events: auto;
-          min-height: 100dvh;
-          min-height: 100vh;
+          background-color: #0b0d17;
         }
         .winner-overlay-bg {
-          position: absolute;
-          inset: 0;
+          position: fixed;
+          top: 0;
+          left: 0;
           z-index: 0;
+          width: 100vw;
+          height: 100vh;
+          height: 100dvh;
           pointer-events: none;
-          animation: winnerBackdropGlow 6s ease-in-out infinite;
           background:
-            radial-gradient(ellipse 90% 55% at 50% 8%, rgba(251, 191, 36, 0.09) 0%, transparent 58%),
-            radial-gradient(ellipse 70% 45% at 50% 92%, rgba(99, 102, 241, 0.07) 0%, transparent 55%),
-            radial-gradient(ellipse 120% 80% at 50% 50%, rgba(0, 0, 0, 0) 35%, rgba(0, 0, 0, 0.42) 100%),
+            radial-gradient(ellipse 90% 55% at 50% 8%, rgba(251, 191, 36, 0.1) 0%, #0b0d17 58%),
+            radial-gradient(ellipse 70% 45% at 50% 92%, rgba(99, 102, 241, 0.08) 0%, #0b0d17 55%),
             linear-gradient(168deg, #0a0c14 0%, #12151f 42%, #161a28 58%, #0b0d17 100%);
         }
         .winner-panel {
@@ -368,4 +369,6 @@ export default function WinnerAnnouncement({
       </div>
     </div>
   );
+
+  return createPortal(overlay, document.body);
 }

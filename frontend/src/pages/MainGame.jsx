@@ -1300,7 +1300,11 @@ export default function MainGame() {
   const displayGameId = gameId ?? (socketConnected ? '…' : '—');
 
   return (
-    <div className="main-game-page relative flex h-[100dvh] max-h-[100dvh] w-full max-w-[100vw] flex-col overflow-hidden bg-theme-game font-sans text-white">
+    <div
+      className={`main-game-page relative flex h-[100dvh] max-h-[100dvh] w-full max-w-[100vw] flex-col overflow-hidden font-sans text-white ${
+        winnerAnnouncement ? 'bg-[#0b0d17]' : 'bg-theme-game'
+      }`}
+    >
       <style>{`
         @keyframes ballPop {
           0% { transform: scale(0.88); opacity: 0.65; }
@@ -1315,7 +1319,7 @@ export default function MainGame() {
           display: none;
         }
       `}</style>
-      {bingoNotice && (
+      {bingoNotice && !winnerAnnouncement && (
         <div
           className="pointer-events-none absolute inset-x-0 top-16 z-[60] flex justify-center px-4"
           role="status"
@@ -1337,6 +1341,8 @@ export default function MainGame() {
           onComplete={() => finishWinnerRoundExitRef.current()}
         />
       )}
+      {!winnerAnnouncement && (
+        <>
       <header className="shrink-0 px-2 pb-1.5 pt-2 sm:px-3 sm:pb-2 sm:pt-2.5">
         <div
           className="grid gap-1.5 sm:gap-2"
@@ -1514,6 +1520,8 @@ export default function MainGame() {
           {isPlayer ? (automatic ? 'Automatic' : 'Bingo') : isWatchingOnly ? 'Watching' : 'Bingo'}
         </button>
       </footer>
+        </>
+      )}
     </div>
   );
 }
