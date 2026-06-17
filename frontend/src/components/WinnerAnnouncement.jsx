@@ -231,11 +231,15 @@ export default function WinnerAnnouncement({
   const totalWinners = orderedWinners.length;
 
   return (
-    <div className="winner-overlay fixed inset-0 z-50 flex items-center justify-center overflow-y-auto px-3 py-5 sm:px-4 sm:py-6">
+    <div className="winner-overlay fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto overscroll-contain px-3 py-5 sm:px-4 sm:py-6">
       <style>{`
         @keyframes winnerOverlayIn {
           from { opacity: 0; }
           to { opacity: 1; }
+        }
+        @keyframes winnerBackdropGlow {
+          0%, 100% { opacity: 0.85; }
+          50% { opacity: 1; }
         }
         @keyframes winnerPanelIn {
           0% { opacity: 0; transform: scale(0.92) translateY(16px); }
@@ -267,10 +271,25 @@ export default function WinnerAnnouncement({
         }
         .winner-overlay {
           animation: winnerOverlayIn 0.3s ease-out forwards;
-          background: transparent;
+          pointer-events: auto;
+          min-height: 100dvh;
+          min-height: 100vh;
+        }
+        .winner-overlay-bg {
+          position: absolute;
+          inset: 0;
+          z-index: 0;
           pointer-events: none;
+          animation: winnerBackdropGlow 6s ease-in-out infinite;
+          background:
+            radial-gradient(ellipse 90% 55% at 50% 8%, rgba(251, 191, 36, 0.09) 0%, transparent 58%),
+            radial-gradient(ellipse 70% 45% at 50% 92%, rgba(99, 102, 241, 0.07) 0%, transparent 55%),
+            radial-gradient(ellipse 120% 80% at 50% 50%, rgba(0, 0, 0, 0) 35%, rgba(0, 0, 0, 0.42) 100%),
+            linear-gradient(168deg, #0a0c14 0%, #12151f 42%, #161a28 58%, #0b0d17 100%);
         }
         .winner-panel {
+          position: relative;
+          z-index: 1;
           animation: winnerPanelIn 0.45s cubic-bezier(0.34, 1.2, 0.64, 1) forwards;
         }
         .winner-header-glow {
@@ -298,7 +317,9 @@ export default function WinnerAnnouncement({
         }
       `}</style>
 
-      <div className="winner-panel pointer-events-auto relative my-auto flex w-full max-w-[min(100%,380px)] flex-col items-center overflow-hidden rounded-[2rem] bg-[#1c1f2b] px-4 py-5 shadow-[0_24px_48px_rgba(0,0,0,0.55)] sm:px-5 sm:py-6">
+      <div className="winner-overlay-bg" aria-hidden />
+
+      <div className="winner-panel relative my-auto flex w-full max-w-[min(100%,380px)] flex-col items-center overflow-hidden rounded-[2rem] bg-[#1c1f2b] px-4 py-5 shadow-[0_24px_48px_rgba(0,0,0,0.55)] sm:px-5 sm:py-6">
         <div
           className="winner-header-glow pointer-events-none absolute inset-x-0 top-0 h-36 bg-[radial-gradient(ellipse_at_center,rgba(245,158,11,0.2)_0%,transparent_68%)]"
           aria-hidden
