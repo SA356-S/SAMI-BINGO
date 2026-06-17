@@ -76,6 +76,10 @@ function hasAdminIo() {
   return ioRef != null;
 }
 
+function getAdminIo() {
+  return ioRef;
+}
+
 function emitGameStatus(session) {
   const snapshot = sessionSnapshot(session);
   broadcastAdmin('gameStatus', snapshot);
@@ -346,6 +350,7 @@ module.exports = {
   resolveSession,
   broadcastAdmin,
   hasAdminIo,
+  getAdminIo,
   emitGameStatus,
   emitNewNumber,
   getRobotsSnapshot,

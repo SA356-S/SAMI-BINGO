@@ -20,6 +20,8 @@ import {
 
 import { initGameAudioSync } from './audio/gameAudioSync';
 
+import { initMiniAppLifecycle } from './lifecycle/miniAppLifecycle';
+
 import { initLobbySession } from './services/lobbySession';
 
 import { bootstrapPlayerSession } from './services/playerSession';
@@ -111,6 +113,7 @@ export default function App() {
 
     const unbindUnlock = bindAudioUnlockOnInteraction();
     const unbindAudioSync = initGameAudioSync();
+    const unbindLifecycle = initMiniAppLifecycle();
 
     return () => {
 
@@ -118,6 +121,7 @@ export default function App() {
 
       unbindUnlock();
       unbindAudioSync();
+      unbindLifecycle();
 
     };
 

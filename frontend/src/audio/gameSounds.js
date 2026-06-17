@@ -48,6 +48,7 @@ let ballSoundsSuppressed = false;
 
 let cacheInitialized = false;
 let audioUnlocked = false;
+let lifecycleAudioSuspended = false;
 
 /** @type {{ number: number; source: string; onComplete?: (ok: boolean) => void }[]} */
 const ballPlayQueue = [];
@@ -341,6 +342,9 @@ function playOneShot(audio, label) {
 async function playBallCallSoundImmediate(number, source) {
   const n = Math.floor(Number(number));
   logInfo('announcer playing clip', { ball: n, source, label: formatBallCall(n) });
+  if (lifecycleAudioSuspended) {
+    return false;
+  }
   if (!shouldPlayGameSound() || ballSoundsSuppressed || bingoWinPlayed) {
     return false;
   }
@@ -586,21 +590,45 @@ export async function playBingoWinSound() {
 
     clearBallQueue();
     stopActiveAudio();
-    bingoWinPlayed = true;
     ballSoundsSuppressed = true;
 
     if (!audioUnlocked) {
       const unlocked = await unlockGameAudio();
       if (!unlocked) {
-        bingoWinPlayed = false;
         ballSoundsSuppressed = false;
         return;
       }
     }
 
-    const audio = getBingoAudio();
-    await playOneShot(audio, `bingo — ${BINGO_SOUND_URL}`);
+    const createBingoPlaybackAudio = () => {
+      const audio = new Audio(BINGO_SOUND_URL);
+      audio.preload = 'auto';
+      audio.volume = 1;
+      audio.muted = false;
+      audio.setAttribute('playsinline', 'true');
+      audio.setAttribute('webkit-playsinline', 'true');
+      return audio;
+    };
+
+    let ok = await playOneShot(
+      createBingoPlaybackAudio(),
+      `bingo — ${BINGO_SOUND_URL}`
+    );
+    if (!ok) {
+      ok = await playOneShot(
+        createBingoPlaybackAudio(),
+        `bingo — retry — ${BINGO_SOUND_URL}`
+      );
+    }
+
+    if (ok) {
+      bingoWinPlayed = true;
+    } else {
+      ballSoundsSuppressed = false;
+      warn('playBingoWinSound failed after retry (game continues)');
+    }
   } catch (err) {
+    ballSoundsSuppressed = false;
     warn('playBingoWinSound failed (game continues):', err?.message || err);
   }
 }
@@ -638,6 +666,32 @@ export function resetBallSoundQueue() {
   queueProcessing = false;
   resetAnnouncedBalls();
   if (!bingoWinPlayed) ballSoundsSuppressed = false;
+}
+
+/** Lifecycle: pause playback and drain pending ball audio while app is backgrounded. */
+export function suspendGameAudioForBackground() {
+  lifecycleAudioSuspended = true;
+  stopActiveAudio();
+  clearBallQueue();
+  queueProcessing = false;
+
+  if (bingoAudio) {
+    try {
+      bingoAudio.pause();
+      bingoAudio.currentTime = 0;
+    } catch {
+      /* ignore */
+    }
+    if (activeAudio === bingoAudio) activeAudio = null;
+  }
+}
+
+/** Lifecycle: drop any stale queued audio after returning to foreground. */
+export function clearStaleAudioOnForeground() {
+  lifecycleAudioSuspended = false;
+  stopActiveAudio();
+  clearBallQueue();
+  queueProcessing = false;
 }
 
 export function resolveBallNumberFromPayload(payload) {

@@ -480,3 +480,38 @@ export function resetLobbyAfterGameEnd() {
   state.countdownExpiredSignaled = false;
   refreshFromApi();
 }
+
+/** Lifecycle: stop the local lobby countdown ticker while backgrounded. */
+export function pauseLobbyLocalTimers() {
+  if (localTickTimer != null) {
+    clearInterval(localTickTimer);
+    localTickTimer = null;
+    logCountdown('ticker-paused-background');
+  }
+}
+
+/** Lifecycle: resume the local lobby countdown ticker after foreground. */
+export function resumeLobbyLocalTimers() {
+  ensureLocalCountdownTicker();
+}
+
+/** Lifecycle: refresh lobby state from REST + socket after foreground. */
+export async function resyncLobbyFromServer() {
+  const socket = getSocket();
+  const userId = activeUserId();
+
+  const apiPromise = refreshFromApi();
+
+  if (socket.connected && userId) {
+    socket.emit('game:lobby-sync', { userId, telegramId: userId }, (ack) => {
+      if (ack?.ok !== false) {
+        applyLobbyPayload(ack, { mergeCartels: true, mergeTaken: true });
+        logCountdown('lobby-resync-foreground', { userId });
+      }
+    });
+  } else if (!socket.connected) {
+    socket.connect();
+  }
+
+  await apiPromise;
+}

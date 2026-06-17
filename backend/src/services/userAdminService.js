@@ -294,6 +294,21 @@ async function addBalance(userId, amount, note) {
 
   await syncWalletUserMeta(key, meta);
 
+  try {
+    const { notifyAdminBalanceCredit } = require('./adminBalanceNotifyService');
+    await notifyAdminBalanceCredit({
+      userId: key,
+      amount: value,
+      wallet: result.wallet,
+      note: note || 'Admin balance credit',
+    });
+  } catch (err) {
+    console.warn('[users] admin balance notify failed', {
+      userId: key,
+      error: err?.message || err,
+    });
+  }
+
   const snapshot = toSnapshot(result.wallet);
   const enriched = await formatUserRow(telegramUser, profile);
 
