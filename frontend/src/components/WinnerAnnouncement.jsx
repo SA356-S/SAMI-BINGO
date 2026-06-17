@@ -44,7 +44,7 @@ const COLUMN_HEADERS = [
 ];
 
 const CELL =
-  'flex h-[clamp(28px,8vw,36px)] w-[clamp(28px,8vw,36px)] items-center justify-center rounded-md text-[clamp(10px,2.6vw,12px)] font-bold tabular-nums leading-none';
+  'flex h-[clamp(38px,11.5vw,50px)] w-[clamp(38px,11.5vw,50px)] items-center justify-center rounded-md text-[clamp(11px,3.2vw,14px)] font-bold tabular-nums leading-none';
 
 function PartyPopper({ flip, className = '' }) {
   return (
@@ -95,12 +95,12 @@ function WinnerCartelGrid({
   };
 
   return (
-    <div className="winner-card-grid w-full rounded-2xl bg-[#1a1d28] p-2.5 sm:p-3">
-      <div className="mx-auto grid w-fit max-w-full grid-cols-5 gap-1 sm:gap-1.5">
+    <div className="winner-card-grid w-full rounded-2xl border border-white/10 bg-[#1a1d28] p-3.5 shadow-[0_0_28px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.06)] sm:p-4">
+      <div className="mx-auto grid w-fit max-w-full grid-cols-5 gap-1.5 sm:gap-2">
         {COLUMN_HEADERS.map(({ letter, color }) => (
           <div
             key={letter}
-            className={`flex h-[clamp(28px,8vw,36px)] w-[clamp(28px,8vw,36px)] items-center justify-center rounded-md text-[clamp(10px,2.6vw,12px)] font-extrabold text-white ${color}`}
+            className={`flex h-[clamp(38px,11.5vw,50px)] w-[clamp(38px,11.5vw,50px)] items-center justify-center rounded-md text-[clamp(11px,3.2vw,14px)] font-extrabold text-white ${color}`}
           >
             {letter}
           </div>
@@ -116,7 +116,7 @@ function WinnerCartelGrid({
                 className={cellStyle(rowIndex, colIndex, cell)}
               >
                 {isFree ? (
-                  <Star className="h-3.5 w-3.5 fill-white text-white" />
+                  <Star className="h-4 w-4 fill-white text-white" />
                 ) : (
                   cell
                 )}
@@ -165,11 +165,11 @@ function ReturnCountdown({ durationSec, onComplete }) {
   }, [durationSec]);
 
   return (
-    <div className="relative z-10 mt-5 w-full">
-      <p className="text-center text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+    <div className="relative z-10 mx-auto mt-5 w-[50%] min-w-[9rem] max-w-[10.5rem]">
+      <p className="text-center text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-400">
         STARTING IN {secondsLeft}S
       </p>
-      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[#2a2d38]">
+      <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[#2a2d38]">
         <div
           className="winner-progress-fill h-full w-full rounded-full bg-orange-500"
           style={{ animationDuration: `${durationSec}s` }}
@@ -267,7 +267,8 @@ export default function WinnerAnnouncement({
         }
         .winner-overlay {
           animation: winnerOverlayIn 0.3s ease-out forwards;
-          background: rgba(7, 9, 16, 0.92);
+          background: transparent;
+          pointer-events: none;
         }
         .winner-panel {
           animation: winnerPanelIn 0.45s cubic-bezier(0.34, 1.2, 0.64, 1) forwards;
@@ -297,7 +298,7 @@ export default function WinnerAnnouncement({
         }
       `}</style>
 
-      <div className="winner-panel relative my-auto flex w-full max-w-[min(100%,340px)] flex-col items-center overflow-hidden rounded-[2rem] bg-[#1c1f2b] px-4 py-5 shadow-[0_24px_48px_rgba(0,0,0,0.55)] sm:px-5 sm:py-6">
+      <div className="winner-panel pointer-events-auto relative my-auto flex w-full max-w-[min(100%,380px)] flex-col items-center overflow-hidden rounded-[2rem] bg-[#1c1f2b] px-4 py-5 shadow-[0_24px_48px_rgba(0,0,0,0.55)] sm:px-5 sm:py-6">
         <div
           className="winner-header-glow pointer-events-none absolute inset-x-0 top-0 h-36 bg-[radial-gradient(ellipse_at_center,rgba(245,158,11,0.2)_0%,transparent_68%)]"
           aria-hidden
@@ -328,16 +329,18 @@ export default function WinnerAnnouncement({
 
         <WinnerPlayerCards winners={visibleWinners} hiddenCount={hiddenCount} />
 
-        <div className="relative z-10 mt-4 w-full">
-          <p className="mb-2 text-center text-[9px] font-bold uppercase tracking-[0.22em] text-amber-400">
+        <div className="relative z-10 mt-4 flex w-full flex-col items-center">
+          <p className="mb-2.5 text-center text-[9px] font-bold uppercase tracking-[0.22em] text-amber-400">
             WINNING CARTEL VIEW
           </p>
-          <WinnerCartelGrid
+          <div className="w-full">
+            <WinnerCartelGrid
             cartelId={primaryCartelId}
             calledNumbers={calledNumbers}
             manualMarks={manualMarksByCartel[primaryCartelId]}
             automatic={automatic}
-          />
+            />
+          </div>
         </div>
 
         <ReturnCountdown durationSec={DISPLAY_SECONDS} onComplete={onComplete} />
