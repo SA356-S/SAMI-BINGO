@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
-import ScreenLayout from '../components/ScreenLayout';
+import Navbar from '../components/Navbar';
 import {
   getPlayerUserId,
   getTelegramUser,
@@ -20,6 +20,9 @@ import {
 } from '../utils/soundSettings';
 import { resetBallSoundQueue, unlockGameAudio } from '../audio/gameSounds';
 
+const PROFILE_CARD =
+  'rounded-[26px] border border-white/[0.06] bg-[#161b22] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]';
+
 function readLocalTelegramIdentity() {
   const user = getTelegramUser();
   const username = formatTelegramUsername(user);
@@ -29,6 +32,15 @@ function readLocalTelegramIdentity() {
     .charAt(0)
     .toUpperCase();
   return { username, firstName, telegramId, initial };
+}
+
+function WalletAmount({ amount, loading }) {
+  return (
+    <p className="mt-2.5 text-[1.75rem] font-bold leading-none tracking-tight text-white">
+      {loading ? '…' : amount}
+      <span className="ml-1.5 text-sm font-semibold text-sky-400">ETB</span>
+    </p>
+  );
 }
 
 export default function Profile({ activeScreen, onNavigate }) {
@@ -107,99 +119,92 @@ export default function Profile({ activeScreen, onNavigate }) {
     }
   };
 
+  const displayUsername = authError
+    ? 'Open in Telegram'
+    : profileLoading && !username
+      ? 'Loading…'
+      : username || firstName || 'Player';
+
+  const statCards = [
+    { label: 'GAME WIN', value: gameWin, valueClass: 'text-amber-400' },
+    { label: 'TOTAL INVITE', value: totalInvite, valueClass: 'text-sky-400' },
+    { label: 'TOTAL EARNED', value: totalEarned, valueClass: 'text-emerald-400' },
+  ];
+
   return (
-    <ScreenLayout
-      activeScreen={activeScreen}
-      onNavigate={onNavigate}
-      contentVariant="fill"
-    >
-      <div className="flex min-h-0 w-full flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {/* User identity */}
-        <section className="shrink-0 flex flex-col items-center pt-1 text-center">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-600 text-2xl font-bold text-white shadow-[0_8px_24px_rgba(99,102,241,0.4)] sm:h-20 sm:w-20 sm:text-3xl">
-            {initial}
+    <div className="relative flex h-[100dvh] max-h-[100dvh] w-full max-w-[100vw] flex-col overflow-hidden bg-[#0b0e11] font-sans text-white">
+      <div
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+        aria-hidden
+      >
+        <div className="absolute left-1/2 top-0 h-56 w-56 -translate-x-1/2 rounded-full bg-indigo-900/20 blur-[90px]" />
+        <div className="absolute bottom-32 -left-16 h-44 w-44 rounded-full bg-violet-900/15 blur-[80px]" />
+      </div>
+
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-3 pb-3 pt-5 sm:px-4 sm:pt-6 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <section className="flex shrink-0 flex-col items-center text-center">
+          <div className="rounded-[24px] bg-gradient-to-br from-violet-500 via-indigo-500 to-cyan-400 p-[3px] shadow-[0_0_32px_rgba(99,102,241,0.42)]">
+            <div className="flex h-[76px] w-[76px] items-center justify-center rounded-[21px] bg-[#0d1118] text-[2rem] font-bold text-white sm:h-[80px] sm:w-[80px] sm:text-[2.15rem]">
+              {initial}
+            </div>
           </div>
-          <h2 className="mt-3 max-w-full truncate px-2 text-lg font-bold text-white sm:text-xl">
-            {authError
-              ? 'Open in Telegram'
-              : profileLoading && !username
-                ? 'Loading…'
-                : username || 'Player'}
+
+          <h2 className="mt-4 max-w-full truncate px-2 text-[1.35rem] font-bold tracking-tight text-white sm:text-2xl">
+            {displayUsername}
           </h2>
-          {firstName ? (
-            <p className="mt-1 max-w-full truncate px-2 text-xs text-white/55">
-              {firstName}
-            </p>
-          ) : null}
+
           {telegramId ? (
-            <p className="mt-0.5 text-[10px] tabular-nums text-white/35">
-              ID {telegramId}
-            </p>
+            <p className="sr-only">Telegram ID {telegramId}</p>
           ) : null}
-          <p className="mt-1 text-[10px] font-semibold tracking-[0.18em] text-slate-400">
+
+          <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.22em] text-indigo-300/85">
             {verified ? 'VERIFIED PLAYER' : 'PLAYER'}
           </p>
         </section>
 
-        {/* Wallet balances */}
-        <section className="shrink-0 grid grid-cols-2 gap-3">
-          <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-3">
-            <p className="text-[9px] font-semibold tracking-[0.12em] text-white/45">
+        <section className="mt-5 grid shrink-0 grid-cols-2 gap-2.5 sm:mt-6 sm:gap-3">
+          <article className={`px-4 py-4 ${PROFILE_CARD}`}>
+            <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               MAIN WALLET
             </p>
-            <p className="mt-1 text-lg font-bold tabular-nums text-white">
-              {mainWallet} ETB
-            </p>
-            <p className="mt-0.5 text-[10px] font-medium text-emerald-400">
-              Withdrawable
-            </p>
-          </div>
-          <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-3">
-            <p className="text-[9px] font-semibold tracking-[0.12em] text-white/45">
+            <WalletAmount amount={mainWallet} loading={profileLoading} />
+            <p className="mt-2 text-[11px] italic text-emerald-400">Withdrawable</p>
+          </article>
+
+          <article className={`px-4 py-4 ${PROFILE_CARD}`}>
+            <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               PLAY WALLET
             </p>
-            <p className="mt-1 text-lg font-bold tabular-nums text-white">
-              {playWallet} ETB
-            </p>
-            <p className="mt-0.5 text-[10px] font-medium text-blue-400">
-              Game Credits
-            </p>
-          </div>
+            <WalletAmount amount={playWallet} loading={profileLoading} />
+            <p className="mt-2 text-[11px] italic text-sky-400">Game Credits</p>
+          </article>
         </section>
 
-        {/* Performance stats */}
-        <section className="shrink-0 grid grid-cols-3 gap-2">
-          {[
-            { label: 'GAME WIN', value: gameWin },
-            { label: 'TOTAL INVITE', value: totalInvite },
-            { label: 'TOTAL EARNED', value: totalEarned },
-          ].map(({ label, value }) => (
-            <div
+        <section className="mt-3 grid shrink-0 grid-cols-3 gap-2 sm:mt-3.5 sm:gap-2.5">
+          {statCards.map(({ label, value, valueClass }) => (
+            <article
               key={label}
-              className="flex flex-col items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04] px-1 py-3"
+              className={`flex flex-col items-center px-2 py-3.5 text-center ${PROFILE_CARD}`}
             >
-              <p className="text-lg font-bold tabular-nums text-white">{value}</p>
-              <p className="mt-1 text-center text-[8px] font-semibold leading-tight tracking-wide text-white/40">
+              <p className="text-[8px] font-semibold uppercase leading-tight tracking-[0.12em] text-slate-500">
                 {label}
               </p>
-            </div>
+              <p
+                className={`mt-2 text-[1.65rem] font-bold leading-none tabular-nums ${valueClass}`}
+              >
+                {profileLoading ? '…' : value}
+              </p>
+            </article>
           ))}
         </section>
 
-        {/* Sound effects */}
-        <section className="shrink-0 pb-1">
-          <div
-            className={`flex items-center gap-3 rounded-2xl border px-3 py-3 transition ${
-              soundOn
-                ? 'border-emerald-500/35 bg-emerald-500/10 shadow-[0_0_24px_rgba(16,185,129,0.15)]'
-                : 'border-white/[0.08] bg-white/[0.03]'
-            }`}
-          >
+        <section className="mt-3 shrink-0 sm:mt-3.5">
+          <div className={`flex items-center gap-3 px-4 py-3.5 ${PROFILE_CARD} rounded-[999px]`}>
             <span
               className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${
                 soundOn
-                  ? 'bg-emerald-500/20 text-emerald-400'
-                  : 'bg-white/5 text-white/35'
+                  ? 'bg-emerald-500/20 text-emerald-400 shadow-[0_0_18px_rgba(34,197,94,0.35)]'
+                  : 'bg-white/[0.06] text-white/35'
               }`}
             >
               {soundOn ? (
@@ -210,15 +215,11 @@ export default function Profile({ activeScreen, onNavigate }) {
             </span>
 
             <div className="min-w-0 flex-1">
-              <p
-                className={`text-sm font-semibold ${
-                  soundOn ? 'text-white' : 'text-white/60'
-                }`}
-              >
+              <p className="text-sm font-bold uppercase tracking-[0.06em] text-white">
                 SOUND EFFECTS
               </p>
-              <p className="text-[11px] text-white/40">
-                Amharic number calls &amp; game audio
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Toggle game audio
               </p>
             </div>
 
@@ -228,19 +229,23 @@ export default function Profile({ activeScreen, onNavigate }) {
               aria-checked={soundOn}
               aria-label="Toggle sound effects"
               onClick={handleSoundToggle}
-              className={`relative h-7 w-12 shrink-0 touch-manipulation rounded-full transition ${
-                soundOn ? 'bg-emerald-500' : 'bg-white/15'
+              className={`relative h-8 w-14 shrink-0 touch-manipulation rounded-full transition ${
+                soundOn
+                  ? 'bg-emerald-500 shadow-[0_0_18px_rgba(34,197,94,0.55)]'
+                  : 'bg-white/15'
               }`}
             >
               <span
-                className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow-md transition-transform ${
-                  soundOn ? 'translate-x-5' : 'translate-x-0'
+                className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow-md transition-transform ${
+                  soundOn ? 'translate-x-6' : 'translate-x-0'
                 }`}
               />
             </button>
           </div>
         </section>
       </div>
-    </ScreenLayout>
+
+      <Navbar activeScreen={activeScreen} onNavigate={onNavigate} embedded />
+    </div>
   );
 }
