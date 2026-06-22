@@ -40,6 +40,10 @@ import {
   unlockGameAudio,
 } from '../audio/gameSounds';
 import { syncGameAudioFromSnapshot } from '../audio/gameAudioSync';
+import {
+  clearGameSession,
+  registerMainGameSessionReset,
+} from '../services/gameSessionLifecycle';
 
 const GAME_ENTRY_STAKE = 10;
 const MIN_PLAYERS = 2;
@@ -488,6 +492,14 @@ export default function MainGame() {
       window.clearTimeout(pendingResetFallbackTimerRef.current);
       pendingResetFallbackTimerRef.current = null;
     }
+    if (bingoNoticeTimerRef.current) {
+      clearTimeout(bingoNoticeTimerRef.current);
+      bingoNoticeTimerRef.current = null;
+    }
+    if (marksSyncTimerRef.current) {
+      clearTimeout(marksSyncTimerRef.current);
+      marksSyncTimerRef.current = null;
+    }
     sessionCartelsRef.current = [];
     setCalledHistory([]);
     setCartelGrids({});
@@ -501,23 +513,19 @@ export default function MainGame() {
     gameWonRef.current = false;
     joinedRef.current = false;
     ignoreGameUpdatesRef.current = true;
+    lastBallSequenceRef.current = 0;
   }, []);
+
+  useEffect(() => registerMainGameSessionReset(clearLocalGameState), [clearLocalGameState]);
 
   const exitToCardSelection = useCallback(
     (payload = {}) => {
       if (exitedToSelectionRef.current) return;
       exitedToSelectionRef.current = true;
-      ignoreGameUpdatesRef.current = true;
-
-      navigate('/card-selection', {
-        replace: true,
-        state: {
-          fromGameEnd: true,
-          gameId: payload?.gameId ?? gameIdRef.current ?? gameId,
-        },
-      });
+      clearGameSession();
+      navigate('/card-selection', { replace: true });
     },
-    [navigate, gameId]
+    [navigate]
   );
 
   useEffect(

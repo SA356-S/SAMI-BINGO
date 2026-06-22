@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { fetchGameData } from '../api/cardSelection';
 import { applyWalletSnapshot, getSocket } from '../api/socket';
 import BingoGrid from '../components/BingoGrid';
@@ -9,9 +9,9 @@ import {
   getLobbyState,
   subscribeLobby,
   updateSelectedCartels,
-  resetLobbyAfterGameEnd,
   applyLobbyPayload,
 } from '../services/lobbySession';
+import { isMainGameAutoEntryBlocked } from '../services/gameSessionLifecycle';
 import { getPlayerUserId, initTelegramWebApp } from '../api/playerIdentity';
 import {
   bindAudioUnlockOnInteraction,
@@ -134,7 +134,6 @@ function CartelBoardPanel({ selectionCount, selectedCartels, isDual }) {
 
 export default function CardSelection() {
   const navigate = useNavigate();
-  const location = useLocation();
   const [lobby, setLobby] = useState(() => getLobbyState());
   const [topBanner, setTopBanner] = useState(null);
   const [mainWallet, setMainWallet] = useState(0);
@@ -175,6 +174,7 @@ export default function CardSelection() {
 
   const enterMainGameFromLobby = useCallback(() => {
     if (enteredMainGameRef.current) return;
+    if (isMainGameAutoEntryBlocked()) return;
     if (!isLobbyGameStarted(lobby)) return;
     enteredMainGameRef.current = true;
     void unlockGameAudio();
@@ -192,6 +192,7 @@ export default function CardSelection() {
 
   useEffect(() => {
     if (enteredMainGameRef.current) return;
+    if (isMainGameAutoEntryBlocked()) return;
     if (!isLobbyGameStarted(lobby)) return;
     enterMainGameFromLobby();
   }, [
@@ -199,6 +200,7 @@ export default function CardSelection() {
     lobby.gameStatus,
     lobby.gameInProgress,
     enterMainGameFromLobby,
+    lobby,
   ]);
 
   const toggleCartel = useCallback(
@@ -296,12 +298,6 @@ export default function CardSelection() {
     initTelegramWebApp();
     loadGameData();
   }, [loadGameData]);
-
-  useEffect(() => {
-    if (!location.state?.fromGameEnd) return;
-    resetLobbyAfterGameEnd();
-    navigate('/card-selection', { replace: true, state: {} });
-  }, [location.state?.fromGameEnd, navigate]);
 
   useEffect(() => {
     if (!topBanner) return undefined;

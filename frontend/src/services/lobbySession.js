@@ -7,6 +7,10 @@ import {
   buildMainGameEntryState,
   isLobbyGameStarted,
 } from '../utils/mainGameEntry';
+import {
+  isMainGameAutoEntryBlocked,
+  releaseMainGameAutoEntry,
+} from './sessionLifecycleFlags';
 
 function activeUserId() {
   return getPlayerUserId() || getLastBootstrapUserId();
@@ -47,8 +51,16 @@ let gameStartNavigateDone = false;
 
 const GAME_ENTRY_STAKE = 10;
 
+function releaseMainGameAutoEntryIfIdle() {
+  if (!isMainGameAutoEntryBlocked()) return;
+  if (!isLobbyGameStarted(state)) {
+    releaseMainGameAutoEntry();
+  }
+}
+
 function maybeNavigateToMainGame() {
   if (!navigateRef || gameStartNavigateDone) return;
+  if (isMainGameAutoEntryBlocked()) return;
   if (!isLobbyGameStarted(state)) return;
 
   gameStartNavigateDone = true;
@@ -184,6 +196,7 @@ export function applyLobbyPayload(
     state.selectedCartels = [];
     state.lobbyPhase = payload.lobbyPhase ?? payload.phase ?? 'COUNTDOWN_RUNNING';
     state.countdownExpiredSignaled = false;
+    releaseMainGameAutoEntryIfIdle();
   } else if (mergeCartels) {
     mergeServerCartels(payload.myCartels ?? payload.selectedCartels);
   }
@@ -223,9 +236,19 @@ export function applyLobbyPayload(
   if (payload.status === 'waiting' && !payload.selectionLocked) {
     state.selectionLocked = false;
     state.gameInProgress = false;
+    releaseMainGameAutoEntryIfIdle();
   }
 
   state.gameStatus = normalizeGameStatus(payload);
+
+  if (isMainGameAutoEntryBlocked() && isLobbyGameStarted(state)) {
+    state.gameInProgress = false;
+    state.gameStatus = 'WAITING';
+    state.selectionLocked = false;
+    if (state.lobbyPhase === 'GAME_STARTED') {
+      state.lobbyPhase = 'COUNTDOWN_RUNNING';
+    }
+  }
 
   notify();
 
@@ -425,6 +448,7 @@ function registerLobbySocketHandlers() {
     state.cartelOwnership = {};
     state.countdownExpiredSignaled = false;
     gameStartNavigateDone = false;
+    releaseMainGameAutoEntryIfIdle();
     logCountdown('reset');
   };
 
@@ -474,11 +498,27 @@ export function initLobbySession(navigate) {
   return () => {};
 }
 
-export function resetLobbyAfterGameEnd() {
+/** Synchronous lobby reset — called only from clearGameSession(). */
+export function resetLobbySessionState() {
+  selectionSyncGeneration += 1;
+  selectionSyncInFlight = false;
   state.selectedCartels = [];
+  state.takenCartels = new Set();
+  state.cartelOwnership = {};
+  state.gameInProgress = false;
+  state.gameStatus = 'WAITING';
+  state.selectionLocked = false;
   state.lobbyPhase = 'COUNTDOWN_RUNNING';
   state.countdownExpiredSignaled = false;
-  refreshFromApi();
+  gameStartNavigateDone = false;
+  notify();
+}
+
+/** Async server sync after clearGameSession(); releases auto-entry block when idle. */
+export function scheduleLobbyResyncAfterSessionClear() {
+  void refreshFromApi().finally(() => {
+    releaseMainGameAutoEntryIfIdle();
+  });
 }
 
 /** Lifecycle: stop the local lobby countdown ticker while backgrounded. */
