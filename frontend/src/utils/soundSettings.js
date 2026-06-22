@@ -4,6 +4,9 @@ export const SOUND_EFFECTS_EVENT = 'edil:sound-effects-changed';
 /** In-memory cache — avoids localStorage lag in Telegram WebView during playback. */
 let cachedEnabled = null;
 
+/** When set, blocks server/profile sync from overriding the user's explicit choice. */
+let userLockedValue = null;
+
 /** Read persisted sound preference (defaults to on). */
 export function getSoundEffectsEnabled() {
   if (cachedEnabled !== null) return cachedEnabled;
@@ -19,9 +22,17 @@ export function getSoundEffectsEnabled() {
 
 /**
  * Persist locally and notify listeners (Profile, MainGame, audio engine).
+ * Pass fromUser: true when the player toggles sound so profile/socket sync cannot revert it.
  */
-export function setSoundEffectsEnabled(enabled, { persistLocal = true } = {}) {
+export function setSoundEffectsEnabled(enabled, { persistLocal = true, fromUser = false } = {}) {
   const value = Boolean(enabled);
+
+  if (fromUser) {
+    userLockedValue = value;
+  } else if (userLockedValue !== null && value !== userLockedValue) {
+    return userLockedValue;
+  }
+
   cachedEnabled = value;
   if (typeof window !== 'undefined' && persistLocal) {
     localStorage.setItem(STORAGE_KEY, value ? 'true' : 'false');
@@ -32,6 +43,11 @@ export function setSoundEffectsEnabled(enabled, { persistLocal = true } = {}) {
     );
   }
   return value;
+}
+
+/** Release user lock when leaving Profile (other screens may sync from server). */
+export function clearSoundUserLock() {
+  userLockedValue = null;
 }
 
 export function subscribeSoundEffects(onChange) {

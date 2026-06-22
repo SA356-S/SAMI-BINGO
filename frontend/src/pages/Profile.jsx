@@ -17,6 +17,7 @@ import {
   getSoundEffectsEnabled,
   setSoundEffectsEnabled,
   subscribeSoundEffects,
+  clearSoundUserLock,
 } from '../utils/soundSettings';
 import { resetBallSoundQueue, unlockGameAudio } from '../audio/gameSounds';
 
@@ -73,13 +74,13 @@ export default function Profile({ activeScreen, onNavigate }) {
     setGameWin(data.gameWin ?? data.totalWins ?? 0);
     setTotalInvite(data.totalInvite ?? 0);
     setTotalEarned(data.totalEarned ?? 0);
-    if (typeof data.soundEffectsEnabled === 'boolean') {
-      setSoundOn(data.soundEffectsEnabled);
-      setSoundEffectsEnabled(data.soundEffectsEnabled);
-    }
   }, []);
 
   useEffect(() => {
+    const initial = getSoundEffectsEnabled();
+    setSoundOn(initial);
+    setSoundEffectsEnabled(initial, { fromUser: true });
+
     const userId = getPlayerUserId();
     fetchProfile(userId).then(applyProfile);
 
@@ -98,13 +99,13 @@ export default function Profile({ activeScreen, onNavigate }) {
       unsubWallet();
       unsubStats();
       unsubSound();
+      clearSoundUserLock();
     };
   }, [applyProfile]);
 
   const handleSoundToggle = async () => {
-    const next = !soundOn;
-    setSoundOn(next);
-    setSoundEffectsEnabled(next);
+    const next = !getSoundEffectsEnabled();
+    setSoundEffectsEnabled(next, { fromUser: true });
     if (next) {
       unlockGameAudio();
     } else {
@@ -114,8 +115,7 @@ export default function Profile({ activeScreen, onNavigate }) {
       await updateSoundEffects(getPlayerUserId(), next);
     } catch {
       const revert = !next;
-      setSoundOn(revert);
-      setSoundEffectsEnabled(revert);
+      setSoundEffectsEnabled(revert, { fromUser: true });
     }
   };
 
