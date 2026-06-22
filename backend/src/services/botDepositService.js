@@ -1,4 +1,5 @@
 const { DepositModel } = require('../models/Deposit');
+const { mongoose } = require('../config/db');
 const { creditDepositAsync } = require('../socket/walletManager');
 const { recordTransaction } = require('./walletTransactionService');
 const { parseDepositMessage, parseBirrAmount } = require('./depositMessageParser');
@@ -15,7 +16,13 @@ const PERMANENT_REJECTION_REASONS = new Set([
   'receipt_amount_missing',
   'wallet_credit_failed',
   'receiver_mismatch',
+  'duplicate_transaction_global',
 ]);
+
+const globallyProcessedTelebirrTxIds = new Set();
+let telebirrMemoryCacheWarmed = false;
+let legacyMongoConnection = null;
+let legacyMongoUnavailable = false;
 
 function toNumber(v) {
   const n = Number(v);
@@ -150,6 +157,161 @@ function collectTxIds(parsed) {
   if (parsed?.apiReference) ids.add(normalizeTxId(parsed.apiReference));
   if (parsed?.transactionNumber) ids.add(normalizeTxId(parsed.transactionNumber));
   return [...ids].filter(Boolean);
+}
+
+function collectGlobalTelebirrDedupKeys(parsed, verified, raw) {
+  const keys = new Set(collectTxIds(parsed));
+  if (verified?.transactionId) keys.add(normalizeTxId(verified.transactionId));
+  if (raw?.receiptNo) keys.add(normalizeTxId(raw.receiptNo));
+  return [...keys].filter(Boolean);
+}
+
+function markGloballyProcessedTelebirrTx(txKeys) {
+  for (const key of txKeys || []) {
+    const normalized = normalizeTxId(key);
+    if (normalized) globallyProcessedTelebirrTxIds.add(normalized);
+  }
+}
+
+function findInMemoryGloballyProcessedTx(txKeys) {
+  for (const key of txKeys || []) {
+    const normalized = normalizeTxId(key);
+    if (normalized && globallyProcessedTelebirrTxIds.has(normalized)) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+async function warmTelebirrProcessedCacheFromCurrentDb() {
+  if (telebirrMemoryCacheWarmed) return;
+  telebirrMemoryCacheWarmed = true;
+
+  try {
+    const approved = await DepositModel.find({
+      status: 'approved',
+      paymentMethod: 'telebirr',
+    })
+      .select('transactionId')
+      .lean();
+
+    for (const doc of approved) {
+      if (doc?.transactionId) {
+        globallyProcessedTelebirrTxIds.add(normalizeTxId(doc.transactionId));
+      }
+    }
+  } catch (err) {
+    console.warn('[botDeposit] failed to warm Telebirr processed cache', err?.message || err);
+  }
+}
+
+function getLegacyMongoUri() {
+  return String(
+    process.env.LEGACY_MONGO_URI ||
+      process.env.MONGO_URI_LEGACY ||
+      process.env.OLD_MONGO_URI ||
+      ''
+  ).trim();
+}
+
+async function getLegacyMongoConnection() {
+  if (legacyMongoUnavailable) return null;
+
+  const uri = getLegacyMongoUri();
+  if (!uri) return null;
+
+  if (legacyMongoConnection?.readyState === 1) {
+    return legacyMongoConnection;
+  }
+
+  try {
+    legacyMongoConnection = await mongoose
+      .createConnection(uri, {
+        serverSelectionTimeoutMS:
+          Number(process.env.LEGACY_MONGO_SERVER_SELECTION_TIMEOUT_MS) || 8000,
+        connectTimeoutMS: Number(process.env.LEGACY_MONGO_CONNECT_TIMEOUT_MS) || 8000,
+      })
+      .asPromise();
+    return legacyMongoConnection;
+  } catch (err) {
+    legacyMongoUnavailable = true;
+    console.warn('[botDeposit] legacy MongoDB unavailable for replay protection', {
+      message: err?.message || String(err),
+    });
+    return null;
+  }
+}
+
+async function findLegacyApprovedTelebirrDeposit(txKeys) {
+  if (!txKeys.length) return null;
+
+  const connection = await getLegacyMongoConnection();
+  if (!connection) return null;
+
+  try {
+    return await connection.db.collection('deposits').findOne({
+      transactionId: { $in: txKeys },
+      status: 'approved',
+      paymentMethod: 'telebirr',
+    });
+  } catch (err) {
+    console.warn('[botDeposit] legacy deposit lookup failed', err?.message || err);
+    return null;
+  }
+}
+
+async function findCurrentApprovedTelebirrDeposit(txKeys) {
+  if (!txKeys.length) return null;
+
+  return DepositModel.findOne({
+    transactionId: { $in: txKeys },
+    status: 'approved',
+    paymentMethod: 'telebirr',
+  }).lean();
+}
+
+async function assertTelebirrNotGloballyDuplicate({ globalKeys }) {
+  if (!globalKeys.length) {
+    return { ok: true };
+  }
+
+  await warmTelebirrProcessedCacheFromCurrentDb();
+
+  const memoryHit = findInMemoryGloballyProcessedTx(globalKeys);
+  if (memoryHit) {
+    return {
+      ok: false,
+      error: 'duplicate_transaction_global',
+      source: 'memory_cache',
+      matchedTransactionId: memoryHit,
+    };
+  }
+
+  const currentApproved = await findCurrentApprovedTelebirrDeposit(globalKeys);
+  if (currentApproved) {
+    markGloballyProcessedTelebirrTx([currentApproved.transactionId, ...globalKeys]);
+    return {
+      ok: false,
+      error: 'duplicate_transaction_global',
+      source: 'current_database',
+      matchedTransactionId: currentApproved.transactionId,
+      depositId: String(currentApproved._id),
+    };
+  }
+
+  const legacyApproved = await findLegacyApprovedTelebirrDeposit(globalKeys);
+  if (legacyApproved) {
+    markGloballyProcessedTelebirrTx([legacyApproved.transactionId, ...globalKeys]);
+    return {
+      ok: false,
+      error: 'duplicate_transaction_global',
+      source: 'legacy_database',
+      matchedTransactionId: legacyApproved.transactionId,
+      depositId: legacyApproved._id ? String(legacyApproved._id) : undefined,
+    };
+  }
+
+  return { ok: true };
 }
 
 function isSuccessStatus(status) {
@@ -535,6 +697,41 @@ async function verifyAndApproveDeposit({
     return { ok: false, error: 'payment_status_failed' };
   }
 
+  if (parsed.paymentMethod === 'telebirr') {
+    const globalKeys = collectGlobalTelebirrDedupKeys(parsed, verified, verification.raw);
+    const duplicateCheck = await assertTelebirrNotGloballyDuplicate({
+      globalKeys,
+    });
+    if (!duplicateCheck.ok) {
+      console.warn('[botDeposit] duplicate_transaction_global — Telebirr replay blocked', {
+        userId: uid,
+        transactionIds: globalKeys,
+        source: duplicateCheck.source,
+        matchedTransactionId: duplicateCheck.matchedTransactionId,
+        depositId: duplicateCheck.depositId,
+        replayFromOldSystem: duplicateCheck.source === 'legacy_database',
+      });
+      logFailedAttempt({
+        userId: uid,
+        transactionIds: globalKeys,
+        reason: 'duplicate_transaction_global',
+        source: duplicateCheck.source,
+        matchedTransactionId: duplicateCheck.matchedTransactionId,
+      });
+      await recordRejectedDeposit({
+        userId: uid,
+        txId: globalKeys[0] || txIds[0],
+        submittedAmount: botReferenceAmount,
+        paymentMethod: parsed.paymentMethod,
+        receiptLink: parsed.receiptLink || '',
+        rawProofText: rawMessage,
+        rejectionReason: 'duplicate_transaction_global',
+        verified,
+      });
+      return { ok: false, error: 'duplicate_transaction_global' };
+    }
+  }
+
   const amountCheck = resolveTrustedDepositAmount(verified, parsed);
   if (!amountCheck.ok) {
     await recordRejectedDeposit({
@@ -688,6 +885,12 @@ async function verifyAndApproveDeposit({
     depositId: String(approved._id),
   });
 
+  if (parsed.paymentMethod === 'telebirr') {
+    markGloballyProcessedTelebirrTx(
+      collectGlobalTelebirrDedupKeys(parsed, verified, verification.raw)
+    );
+  }
+
   return {
     ok: true,
     credited: creditAmount,
@@ -711,6 +914,8 @@ const REJECTION_USER_MESSAGES = {
   receipt_amount_missing: '❌ ከVerifier የተከፈለው መጠን ማግኘት አልተቻለም።',
   receiver_mismatch:
     '❌ ክፍያው ወደ ትክክለኛው Telebirr አካውንት አልተላከም። የእኛን አካውንት ብቻ ይክፈሉ።',
+  duplicate_transaction_global:
+    '⚠️ ይህ ግብይት አስቀድሞ ተረጋግጧል። የተለየ ክፍያ ይሞክሩ።',
   verification_failed: '❌ የማረጋገጫ አገልግሎት ስህተት። ቆይተው እንደገና ይሞክሩ።',
   wallet_credit_failed: '❌ Wallet ማዘመን አልተሳካም። Transaction IDዎን በመያዝ support ያግኙ።',
   verifier_timeout: '❌ የማረጋገጫ አገልግሎት ጊዜው አልፏል። ቆይተው እንደገና ይሞክሩ።',
