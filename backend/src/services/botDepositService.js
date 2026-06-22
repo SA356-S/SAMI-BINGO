@@ -14,6 +14,7 @@ const PERMANENT_REJECTION_REASONS = new Set([
   'cbebirr_params_required',
   'receipt_amount_missing',
   'wallet_credit_failed',
+  'receiver_mismatch',
 ]);
 
 function toNumber(v) {
@@ -27,6 +28,120 @@ function normalizeString(v) {
 
 function normalizeTxId(v) {
   return normalizeString(v).toUpperCase().replace(/\s+/g, '');
+}
+
+function normalizeReceiverName(name) {
+  return normalizeString(name).toLowerCase().replace(/\s+/g, ' ');
+}
+
+function buildEthiopianPhoneVariants(phone) {
+  const digits = normalizeString(phone).replace(/\D/g, '');
+  const variants = new Set();
+  if (!digits) return variants;
+
+  variants.add(digits);
+
+  if (digits.startsWith('0') && digits.length === 10) {
+    variants.add(`251${digits.slice(1)}`);
+    variants.add(digits.slice(1));
+  }
+  if (digits.startsWith('251') && digits.length >= 12) {
+    variants.add(digits.slice(3));
+    variants.add(`0${digits.slice(3)}`);
+  }
+  if (digits.length === 9 && digits.startsWith('9')) {
+    variants.add(`251${digits}`);
+    variants.add(`0${digits}`);
+  }
+
+  return variants;
+}
+
+function telebirrReceiverNameMatches(actualName, expectedName) {
+  const actual = normalizeReceiverName(actualName);
+  const expected = normalizeReceiverName(expectedName);
+  if (!expected) return false;
+  if (!actual) return false;
+  return actual === expected;
+}
+
+function telebirrReceiverAccountMatches(actualAccount, expectedPhone) {
+  const expectedVariants = buildEthiopianPhoneVariants(expectedPhone);
+  if (!expectedVariants.size) return false;
+
+  const raw = normalizeString(actualAccount);
+  if (!raw) return false;
+
+  const actualDigits = raw.replace(/\D/g, '');
+
+  for (const exp of expectedVariants) {
+    if (actualDigits && actualDigits === exp) return true;
+    if (
+      actualDigits.length >= 9 &&
+      exp.length >= 9 &&
+      actualDigits.slice(-9) === exp.slice(-9)
+    ) {
+      return true;
+    }
+  }
+
+  if (raw.includes('*')) {
+    const prefixMatch = raw.match(/^(\d+)\*+/);
+    const suffixMatch = raw.match(/\*+(\d+)$/);
+    if (prefixMatch && suffixMatch) {
+      const prefix = prefixMatch[1];
+      const suffix = suffixMatch[1];
+      for (const exp of expectedVariants) {
+        const norm = exp.startsWith('251')
+          ? exp
+          : exp.startsWith('0')
+            ? `251${exp.slice(1)}`
+            : `251${exp}`;
+        if (
+          norm.length >= prefix.length + suffix.length &&
+          norm.startsWith(prefix) &&
+          norm.endsWith(suffix)
+        ) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+function validateConfiguredTelebirrReceiver(verified) {
+  const method = getPaymentMethod('telebirr');
+  const expectedName = method?.accountName || '';
+  const expectedPhone = method?.phoneNumber || '';
+  const actualName = verified?.receiverName || '';
+  const actualAccount = verified?.receiverAccount || '';
+
+  const expected = {
+    receiverName: expectedName,
+    receiverAccount: expectedPhone,
+  };
+  const actual = {
+    receiverName: actualName,
+    receiverAccount: actualAccount,
+  };
+
+  const nameOk = telebirrReceiverNameMatches(actualName, expectedName);
+  const accountOk = telebirrReceiverAccountMatches(actualAccount, expectedPhone);
+
+  if (nameOk && accountOk) {
+    return { ok: true };
+  }
+
+  return {
+    ok: false,
+    error: 'receiver_mismatch',
+    expected,
+    actual,
+    nameOk,
+    accountOk,
+  };
 }
 
 function collectTxIds(parsed) {
@@ -435,6 +550,38 @@ async function verifyAndApproveDeposit({
     return { ok: false, error: amountCheck.error };
   }
 
+  if (parsed.paymentMethod === 'telebirr') {
+    const receiverCheck = validateConfiguredTelebirrReceiver(verified);
+    if (!receiverCheck.ok) {
+      console.warn('[botDeposit] receiver_mismatch — deposit blocked', {
+        userId: uid,
+        transactionIds: txIds,
+        expected: receiverCheck.expected,
+        actual: receiverCheck.actual,
+        nameOk: receiverCheck.nameOk,
+        accountOk: receiverCheck.accountOk,
+      });
+      logFailedAttempt({
+        userId: uid,
+        transactionIds: txIds,
+        reason: 'receiver_mismatch',
+        expected: receiverCheck.expected,
+        actual: receiverCheck.actual,
+      });
+      await recordRejectedDeposit({
+        userId: uid,
+        txId: txIds[0],
+        submittedAmount: botReferenceAmount,
+        paymentMethod: parsed.paymentMethod,
+        receiptLink: parsed.receiptLink || '',
+        rawProofText: rawMessage,
+        rejectionReason: 'receiver_mismatch',
+        verified,
+      });
+      return { ok: false, error: 'receiver_mismatch' };
+    }
+  }
+
   const creditAmount = amountCheck.verifiedAmount;
   verified.verifiedAmount = creditAmount;
   logBotAmountIgnored(botReferenceAmount, creditAmount, amountCheck.source);
@@ -562,6 +709,8 @@ const REJECTION_USER_MESSAGES = {
   cbebirr_params_required: '❌ CBE Birr ተቀማጭ ገንዘብ receipt number እና ስልክ ቁጥር በመልእክት ውስጥ መኖር አለበት።',
   payment_status_failed: '❌ ክፍያው በVerifier መሠረት ተሳክቶ አልተገኘም።',
   receipt_amount_missing: '❌ ከVerifier የተከፈለው መጠን ማግኘት አልተቻለም።',
+  receiver_mismatch:
+    '❌ ክፍያው ወደ ትክክለኛው Telebirr አካውንት አልተላከም። የእኛን አካውንት ብቻ ይክፈሉ።',
   verification_failed: '❌ የማረጋገጫ አገልግሎት ስህተት። ቆይተው እንደገና ይሞክሩ።',
   wallet_credit_failed: '❌ Wallet ማዘመን አልተሳካም። Transaction IDዎን በመያዝ support ያግኙ።',
   verifier_timeout: '❌ የማረጋገጫ አገልግሎት ጊዜው አልፏል። ቆይተው እንደገና ይሞክሩ።',
