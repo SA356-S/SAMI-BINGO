@@ -1,5 +1,6 @@
 import { getSocket } from '../api/socket';
 import {
+  hasAudiblyPlayedBall,
   playBallCallSoundAndWait,
   playBingoWinSoundAfterBallsIdle,
   playCountdownTickSound,
@@ -20,6 +21,38 @@ let lastBallSequence = 0;
 let activeGameId = null;
 let bingoEndAudioBusy = false;
 let deferredAudioReset = false;
+
+/**
+ * Join-race edge case: snapshot ack includes exactly one drawn ball (silent sync)
+ * before the matching live socket event. Allows one live audio pass for that seq.
+ * @type {{ ball: number, seq: number } | null}
+ */
+let pendingSnapshotLiveAudio = null;
+
+function clearPendingSnapshotLiveAudio() {
+  pendingSnapshotLiveAudio = null;
+}
+
+function trySetPendingSnapshotLiveAudio(balls, seq) {
+  clearPendingSnapshotLiveAudio();
+  if (!Array.isArray(balls) || balls.length !== 1) return;
+  if (!Number.isFinite(seq) || seq !== 1) return;
+
+  const onlyBall = Math.floor(Number(balls[0]));
+  if (!Number.isFinite(onlyBall) || onlyBall < 1 || onlyBall > 75) return;
+  if (hasAudiblyPlayedBall(onlyBall)) return;
+
+  pendingSnapshotLiveAudio = { ball: onlyBall, seq };
+}
+
+function consumePendingSnapshotLiveAudio(ball, seq) {
+  if (!pendingSnapshotLiveAudio) return false;
+  if (pendingSnapshotLiveAudio.ball !== ball || pendingSnapshotLiveAudio.seq !== seq) {
+    return false;
+  }
+  pendingSnapshotLiveAudio = null;
+  return true;
+}
 
 function matchesActiveGame(payload) {
   const incoming = payload?.gameId != null ? String(payload.gameId) : null;
@@ -46,14 +79,19 @@ export function syncGameAudioFromSnapshot(payload = {}) {
     payload?.called ??
     payload?.balls ??
     payload?.calledHistory;
+
   if (Array.isArray(balls) && balls.length > 0) {
     syncAnnouncedBallsFromHistory(balls);
+    trySetPendingSnapshotLiveAudio(balls, seq);
+  } else {
+    clearPendingSnapshotLiveAudio();
   }
 }
 
 function resetAudioSession() {
   lastBallSequence = 0;
   activeGameId = null;
+  clearPendingSnapshotLiveAudio();
   resetBallSoundQueue();
   resetBingoWinSound();
   resetAnnouncedBalls();
@@ -63,6 +101,7 @@ function resetAudioSession() {
 export function resetGameAudioForEntry(gameId = null) {
   lastBallSequence = 0;
   activeGameId = gameId != null ? String(gameId) : null;
+  clearPendingSnapshotLiveAudio();
   resetRoundAudioReady();
   resetBallSoundQueue();
   resetBingoWinSound();
@@ -115,8 +154,14 @@ function handleBallAudioEvent(payload, eventName) {
 
   const seq = Number(payload?.sequence);
   if (Number.isFinite(seq) && seq > 0) {
-    if (seq <= lastBallSequence) return;
-    lastBallSequence = seq;
+    if (seq <= lastBallSequence) {
+      if (!consumePendingSnapshotLiveAudio(n, seq)) {
+        return;
+      }
+    } else {
+      clearPendingSnapshotLiveAudio();
+      lastBallSequence = seq;
+    }
   }
 
   console.log('[bingo-audio] ball event received', {

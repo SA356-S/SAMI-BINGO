@@ -63,6 +63,9 @@ let lastQueuedBall = null;
 /** Balls already announced this round (skip replay; rejoin sync marks past balls) */
 const announcedBalls = new Set();
 
+/** Balls that actually completed audio playback this round. */
+const audiblyPlayedBalls = new Set();
+
 function log(...args) {
   if (DEBUG) console.log(LOG_PREFIX, ...args);
 }
@@ -308,6 +311,19 @@ export function unmarkBallAnnounced(number) {
 
 export function resetAnnouncedBalls() {
   announcedBalls.clear();
+  audiblyPlayedBalls.clear();
+}
+
+export function hasAudiblyPlayedBall(number) {
+  const n = Math.floor(Number(number));
+  return Number.isFinite(n) && audiblyPlayedBalls.has(n);
+}
+
+function markBallAudiblyPlayed(number) {
+  const n = Math.floor(Number(number));
+  if (Number.isFinite(n) && n >= MIN_BALL && n <= MAX_BALL) {
+    audiblyPlayedBalls.add(n);
+  }
 }
 
 function playOneShot(audio, label) {
@@ -395,7 +411,10 @@ async function playBallCallSoundImmediate(number, source) {
     return false;
   }
 
-  return playOneShot(audio, `${formatBallCall(n)} (${source})`);
+  return playOneShot(audio, `${formatBallCall(n)} (${source})`).then((ok) => {
+    if (ok) markBallAudiblyPlayed(n);
+    return ok;
+  });
 }
 
 async function drainBallQueue() {
