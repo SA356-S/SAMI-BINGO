@@ -22,6 +22,7 @@ import {
   deserializeManualMarks,
   serializeManualMarks,
   getPlayerUserId,
+  joinAsWatcher,
 } from '../api/gameSession';
 import { updateSoundEffects, fetchProfile } from '../api/profile';
 import {
@@ -41,9 +42,12 @@ import {
   clearGameSession,
   initializeGameSession,
   invalidateGameSessionGeneration,
+  isActiveGameSessionGeneration,
+  registerMainGameResumeHandler,
   registerMainGameSessionReset,
   shouldFallbackToCardSelection,
 } from '../services/gameSessionLifecycle';
+import { GAME_STATUS, normalizeGameStatus } from '../utils/gameStatus';
 
 const GAME_ENTRY_STAKE = 10;
 const MIN_PLAYERS = 2;
@@ -826,6 +830,96 @@ export default function MainGame() {
       revealWinnerFromServerRef.current(winnerPayload);
     }
   }, []);
+
+  const resumeGameFromServer = useCallback(
+    async ({ status, generation }) => {
+      if (!isActiveGameSessionGeneration(generation)) return;
+
+      const gameStatus = normalizeGameStatus(status);
+      const socket = getSocket();
+      const userId = getPlayerUserId();
+
+      if (
+        gameStatus === GAME_STATUS.FINISHED ||
+        gameStatus === GAME_STATUS.WAITING
+      ) {
+        applyPendingWinner(status);
+        if (!winnerAnnouncementRef.current && !gameWonRef.current) {
+          clearGameSession();
+          navigate('/card-selection', { replace: true });
+        }
+        return;
+      }
+
+      if (gameStatus !== GAME_STATUS.RUNNING) return;
+
+      ignoreGameUpdatesRef.current = false;
+      lastBallSequenceRef.current = 0;
+
+      const gameId = status?.gameId ?? gameIdRef.current;
+      if (!gameId) return;
+
+      let ack;
+      if (isWatchingOnly) {
+        ack = await joinAsWatcher(userId, gameId);
+      } else if (sessionCartelsRef.current.length > 0) {
+        ack = await new Promise((resolve) => {
+          socket.emit(
+            'game:rejoin',
+            { gameId, userId, playerName: userId },
+            resolve
+          );
+        });
+      } else {
+        ack = await new Promise((resolve) => {
+          socket.emit('game:state', { gameId }, resolve);
+        });
+      }
+
+      if (!isActiveGameSessionGeneration(generation)) return;
+      if (ack?.ok === false) return;
+
+      if (ack.gameId) {
+        const id = String(ack.gameId);
+        gameIdRef.current = id;
+        setGameId(id);
+      }
+
+      syncFromServer(omitBallFields(ack));
+
+      const balls = normalizeCalledNumbers(ack);
+      syncRejoinCalledBalls(balls);
+
+      if (ack.manualMarks) {
+        setManualMarks(deserializeManualMarks(ack.manualMarks));
+      }
+      if (typeof ack.automatic === 'boolean') {
+        setAutomatic(ack.automatic);
+      }
+
+      const cartels = (ack.myCartels ?? ack.selectedCartels ?? []).map(Number);
+      if (cartels.length > 0 && !isWatchingOnly) {
+        sessionCartelsRef.current = cartels;
+        setMyCartels(cartels);
+      }
+
+      applyPendingWinner(ack);
+      joinedRef.current = true;
+      sessionLiveRef.current = true;
+    },
+    [
+      isWatchingOnly,
+      syncFromServer,
+      syncRejoinCalledBalls,
+      applyPendingWinner,
+      navigate,
+    ]
+  );
+
+  useEffect(
+    () => registerMainGameResumeHandler(resumeGameFromServer),
+    [resumeGameFromServer]
+  );
 
   const applyBallDrawPayloadRef = useRef(applyBallDrawPayload);
   applyBallDrawPayloadRef.current = applyBallDrawPayload;

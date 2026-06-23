@@ -6,6 +6,7 @@ import { getPlayerUserId } from '../api/playerIdentity';
 import { joinAsWatcher } from '../api/gameSession';
 import { normalizeGameStatus, GAME_STATUS } from '../utils/gameStatus';
 import {
+  clearStaleAudioOnForeground,
   prepareGameAudioForRound,
   resetBallSoundQueue,
   unlockGameAudio,
@@ -18,7 +19,9 @@ import {
 import {
   rebindLobbySocketHandlers,
   resetLobbySessionState,
+  resyncLobbyFromServer,
   resyncLobbySnapshotForSession,
+  resumeLobbyLocalTimers,
   scheduleLobbyResyncAfterSessionClear,
 } from './lobbySession';
 
@@ -26,6 +29,11 @@ const JOIN_ACK_TIMEOUT_MS = 12000;
 
 /** @type {(() => void) | null} */
 let mainGameSessionReset = null;
+
+/** @type {((ctx: { status: object; generation: number }) => Promise<void>) | null} */
+let mainGameResumeHandler = null;
+
+let resumeInFlight = false;
 
 /** All session lifecycle flags live here — single source of truth. */
 const session = {
@@ -38,6 +46,25 @@ const session = {
 
 function logInit(phase, detail = {}) {
   console.log(`[game-init] ${phase}`, detail);
+}
+
+function logResume(phase, detail = {}) {
+  console.log(`[resume-sync] ${phase}`, detail);
+}
+
+function isMainGameRoute() {
+  if (typeof window === 'undefined') return false;
+  const path = window.location.pathname;
+  return path === '/main-game' || path === '/game-75-ball';
+}
+
+export function registerMainGameResumeHandler(handler) {
+  mainGameResumeHandler = handler;
+  return () => {
+    if (mainGameResumeHandler === handler) {
+      mainGameResumeHandler = null;
+    }
+  };
 }
 
 export function isMainGameAutoEntryBlocked() {
@@ -377,4 +404,64 @@ export function clearGameSession() {
   resetBallSoundQueue();
   resetGameAudioForEntry(null);
   scheduleLobbyResyncAfterSessionClear();
+}
+
+/**
+ * Single resume path when Mini App returns from background.
+ * Server snapshot replaces local state — no merge, no ball replay.
+ */
+export async function resumeGameSession() {
+  if (resumeInFlight || session.busy) {
+    logResume('RESUME_SKIPPED', { reason: resumeInFlight ? 'in_flight' : 'busy' });
+    return { ok: false, skipped: true };
+  }
+
+  resumeInFlight = true;
+  logResume('RESUME_START');
+
+  const generation = invalidateGameSessionGeneration();
+
+  try {
+    clearStaleAudioOnForeground();
+    resetBallSoundQueue();
+    rebindLobbySocketHandlers();
+    rebindGameAudioSync();
+    logResume('SOCKET_REBOUND');
+
+    resumeLobbyLocalTimers();
+    await resyncLobbyFromServer({ replace: true });
+
+    const socket = await ensureSocketConnectedWithRetry();
+    if (!socket) {
+      logResume('RESUME_FAILED', { reason: 'socket_connect_failed' });
+      return { ok: false, error: 'socket_connect_failed' };
+    }
+
+    const { fetchPlayerGameStatus } = await import('../api/gameSession');
+    const status = await fetchPlayerGameStatus();
+    logResume('SNAPSHOT_FETCHED', {
+      gameStatus: normalizeGameStatus(status),
+      gameId: status?.gameId ?? null,
+    });
+
+    if (!isActiveGameSessionGeneration(generation)) {
+      return { ok: false, aborted: true, generation };
+    }
+
+    if (isMainGameRoute() && mainGameResumeHandler) {
+      await mainGameResumeHandler({ status, generation });
+      logResume('STATE_REPLACED');
+    }
+
+    await unlockGameAudio();
+    await prepareGameAudioForRound();
+
+    logResume('RESUME_COMPLETE');
+    return { ok: true, generation, status };
+  } catch (err) {
+    logResume('RESUME_FAILED', { reason: err?.message ?? String(err) });
+    return { ok: false, error: err?.message ?? 'resume_failed' };
+  } finally {
+    resumeInFlight = false;
+  }
 }

@@ -717,6 +717,7 @@ export function suspendGameAudioForBackground() {
   lifecycleAudioSuspended = true;
   stopActiveAudio();
   clearBallQueue();
+  clearPreReadyBallBuffer();
   queueProcessing = false;
 
   if (bingoAudio) {
@@ -735,6 +736,7 @@ export function clearStaleAudioOnForeground() {
   lifecycleAudioSuspended = false;
   stopActiveAudio();
   clearBallQueue();
+  clearPreReadyBallBuffer();
   queueProcessing = false;
 }
 

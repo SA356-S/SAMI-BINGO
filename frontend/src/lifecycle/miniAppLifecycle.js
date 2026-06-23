@@ -1,22 +1,15 @@
-import { clearStaleAudioOnForeground, suspendGameAudioForBackground } from '../audio/gameSounds';
-import { rebindGameAudioSync } from '../audio/gameAudioSync';
-import { getSocket } from '../api/socket';
-import {
-  pauseLobbyLocalTimers,
-  resyncLobbyFromServer,
-  resumeLobbyLocalTimers,
-} from '../services/lobbySession';
+import { suspendGameAudioForBackground } from '../audio/gameSounds';
+import { pauseLobbyLocalTimers } from '../services/lobbySession';
+import { resumeGameSession } from '../services/gameSessionLifecycle';
 import { initTelegramWebApp } from '../utils/telegramWebApp';
 
 const LOG_PREFIX = '[miniapp-lifecycle]';
 
-let appSuspended = false;
-let resyncInFlight = false;
+/** Skip fallback verify on cold-start pageshow; bootstrap already syncs. */
+const FOREGROUND_VERIFY_MIN_MS = 2500;
 
-function isMainGameRoute() {
-  const path = window.location.pathname;
-  return path === '/main-game' || path === '/game-75-ball';
-}
+let appSuspended = false;
+let lifecycleInitAt = 0;
 
 function log(...args) {
   console.log(LOG_PREFIX, ...args);
@@ -33,53 +26,30 @@ function handleBackground() {
   pauseLobbyLocalTimers();
 }
 
-async function resyncActiveGameSession() {
-  if (!isMainGameRoute()) return;
-
-  const { fetchPlayerGameStatus } = await import('../api/gameSession');
-  const status = await fetchPlayerGameStatus();
-  if (!status || status.ok === false) return;
-
-  const socket = getSocket();
-  if (!socket.connected) {
-    socket.connect();
-    return;
-  }
-
-  log('foreground — refreshing in-game session via socket reconnect');
-  socket.disconnect();
-  socket.connect();
-}
-
-async function handleForeground() {
-  if (!appSuspended) return;
+function handleForeground() {
   if (document.visibilityState === 'hidden') return;
-  if (resyncInFlight) return;
 
+  const hadSuspendedFlag = appSuspended;
   appSuspended = false;
-  resyncInFlight = true;
 
-  try {
-    log('foreground — clearing stale audio and resyncing from server');
-
-    clearStaleAudioOnForeground();
-    resumeLobbyLocalTimers();
-    rebindGameAudioSync();
-
-    await resyncLobbyFromServer();
-    await resyncActiveGameSession();
-  } catch (err) {
-    console.warn(LOG_PREFIX, 'foreground resync failed:', err?.message || err);
-  } finally {
-    resyncInFlight = false;
+  if (!hadSuspendedFlag) {
+    const sinceInit = lifecycleInitAt ? Date.now() - lifecycleInitAt : 0;
+    if (sinceInit < FOREGROUND_VERIFY_MIN_MS) {
+      return;
+    }
+    log('foreground — snapshot verify (no background flag)');
+  } else {
+    log('foreground — resume from background');
   }
+
+  void resumeGameSession();
 }
 
 function onVisibilityChange() {
   if (document.visibilityState === 'hidden') {
     handleBackground();
   } else {
-    void handleForeground();
+    handleForeground();
   }
 }
 
@@ -88,23 +58,21 @@ function onPageHide() {
 }
 
 function onPageShow() {
-  void handleForeground();
+  handleForeground();
 }
 
 function bindTelegramLifecycle(webApp) {
   if (!webApp?.onEvent) return () => {};
 
   const onDeactivated = () => handleBackground();
-  const onActivated = () => {
-    void handleForeground();
-  };
+  const onActivated = () => handleForeground();
   const onVisibilityChanged = (event) => {
     if (event?.is_visible === false) {
       handleBackground();
       return;
     }
     if (event?.is_visible === true) {
-      void handleForeground();
+      handleForeground();
     }
   };
 
@@ -124,12 +92,13 @@ function bindTelegramLifecycle(webApp) {
 }
 
 /**
- * Mini App background/foreground handling — audio queues and local timers only.
+ * Mini App background/foreground — delegates resume to resumeGameSession().
  * @returns {() => void} cleanup
  */
 export function initMiniAppLifecycle() {
   if (typeof window === 'undefined') return () => {};
 
+  lifecycleInitAt = Date.now();
   const webApp = initTelegramWebApp();
   const unbindTelegram = bindTelegramLifecycle(webApp);
 

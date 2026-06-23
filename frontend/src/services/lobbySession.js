@@ -590,17 +590,21 @@ export function resumeLobbyLocalTimers() {
 }
 
 /** Lifecycle: refresh lobby state from REST + socket after foreground. */
-export async function resyncLobbyFromServer() {
+export async function resyncLobbyFromServer({ replace = false } = {}) {
   const socket = getSocket();
   const userId = activeUserId();
 
-  const apiPromise = refreshFromApi();
+  const apiPromise = refreshFromApi({ replace });
 
   if (socket.connected && userId) {
     socket.emit('game:lobby-sync', { userId, telegramId: userId }, (ack) => {
       if (ack?.ok !== false) {
-        applyLobbyPayload(ack, { mergeCartels: true, mergeTaken: true });
-        logCountdown('lobby-resync-foreground', { userId });
+        applyLobbyPayload(ack, {
+          mergeCartels: !replace,
+          mergeTaken: true,
+          replace,
+        });
+        logCountdown('lobby-resync-foreground', { userId, replace });
       }
     });
   } else if (!socket.connected) {
