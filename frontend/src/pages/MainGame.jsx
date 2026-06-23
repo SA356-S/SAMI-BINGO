@@ -8,7 +8,6 @@ import {
   getSocket,
   normalizeCalledNumbers,
 } from '../api/socket';
-import { normalizeGameStatus, GAME_STATUS } from '../utils/gameStatus';
 import MasterBingoGrid from '../components/MasterBingoGrid';
 import MainGameCartela from '../components/MainGameCartela';
 import { formatBallCall, getBingoLetter } from '../utils/bingoBall';
@@ -23,7 +22,6 @@ import {
   deserializeManualMarks,
   serializeManualMarks,
   getPlayerUserId,
-  joinAsWatcher,
 } from '../api/gameSession';
 import { updateSoundEffects, fetchProfile } from '../api/profile';
 import {
@@ -33,7 +31,6 @@ import {
 } from '../utils/soundSettings';
 import {
   BALL_REVEAL_ANIMATION_MS,
-  bindAudioUnlockOnInteraction,
   prepareGameAudioForRound,
   resetBallSoundQueue,
   syncAnnouncedBallsFromHistory,
@@ -42,7 +39,10 @@ import {
 import { syncGameAudioFromSnapshot } from '../audio/gameAudioSync';
 import {
   clearGameSession,
+  initializeGameSession,
+  invalidateGameSessionGeneration,
   registerMainGameSessionReset,
+  shouldFallbackToCardSelection,
 } from '../services/gameSessionLifecycle';
 
 const GAME_ENTRY_STAKE = 10;
@@ -287,6 +287,8 @@ export default function MainGame() {
   const automaticRef = useRef(automatic);
   const marksSyncTimerRef = useRef(null);
   const bingoNoticeTimerRef = useRef(null);
+  const sessionLiveRef = useRef(false);
+  const sessionHandlersRef = useRef(null);
   gameWonRef.current = gameWon;
   calledHistoryRef.current = calledHistory;
   manualMarksRef.current = manualMarks;
@@ -296,6 +298,9 @@ export default function MainGame() {
   useEffect(() => {
     exitedToSelectionRef.current = false;
     ignoreGameUpdatesRef.current = false;
+    joinedRef.current = false;
+    sessionLiveRef.current = false;
+    lastBallSequenceRef.current = 0;
 
     if (!isWatchingOnly && sessionCartelsRef.current.length < 1) {
       navigate('/card-selection', { replace: true });
@@ -330,11 +335,8 @@ export default function MainGame() {
 
   useEffect(() => {
     fetchProfile(getPlayerUserId()).catch(() => {});
-    void prepareGameAudioForRound();
-    const unbindUnlock = bindAudioUnlockOnInteraction();
     const unsubSound = subscribeSoundEffects(setSoundOn);
     return () => {
-      unbindUnlock();
       unsubSound();
     };
   }, []);
@@ -862,6 +864,22 @@ export default function MainGame() {
     submitBingoClaim,
   ]);
 
+  const handleSessionInitResult = useCallback(
+    (result) => {
+      if (result?.ok && !result?.aborted) {
+        sessionLiveRef.current = true;
+        return;
+      }
+      if (result?.aborted) return;
+      joinedRef.current = false;
+      sessionLiveRef.current = false;
+      if (shouldFallbackToCardSelection(result)) {
+        navigate('/card-selection', { replace: true });
+      }
+    },
+    [navigate]
+  );
+
   useEffect(() => {
     if (state?.gameId) setGameId(state.gameId);
   }, [state?.gameId]);
@@ -880,43 +898,27 @@ export default function MainGame() {
       setSocketConnected(true);
       setMySocketId(socket.id);
 
+      if (!sessionLiveRef.current || ignoreGameUpdatesRef.current) return;
+
       const needsWinnerResync =
         gameWonRef.current && !winnerAnnouncementRef.current;
 
-      if (
-        gameIdRef.current &&
-        !ignoreGameUpdatesRef.current &&
-        (!gameWonRef.current || needsWinnerResync)
-      ) {
-        if (isWatchingOnly) {
-          joinAsWatcher(getPlayerUserId(), gameIdRef.current).then((ack) => {
-            if (ack?.ok === false) return;
-            adoptGameId(ack);
-            syncFromServer(omitBallFields(ack));
-            applyBallDrawPayloadRef.current(ack, 'game:rejoin');
-            applyPendingWinner(ack);
-          });
-        } else if (sessionCartelsRef.current.length > 0) {
-          socket.emit(
-            'game:rejoin',
-            {
-              gameId: gameIdRef.current,
-              userId: getPlayerUserId(),
-              playerName: getPlayerUserId(),
-            },
-            (ack) => {
-              if (ack?.ok === false) return;
-              adoptGameId(ack);
-              syncFromServer(omitBallFields(ack));
-              applyBallDrawPayloadRef.current(ack, 'game:rejoin');
-              applyPendingWinner(ack);
-              if (ack.manualMarks) {
-                setManualMarks(deserializeManualMarks(ack.manualMarks));
-              }
-            }
-          );
-        }
-      }
+      if (gameWonRef.current && !needsWinnerResync) return;
+      if (!gameIdRef.current) return;
+
+      const reconnectMode = isWatchingOnly
+        ? 'watch'
+        : sessionCartelsRef.current.length > 0
+          ? 'rejoin'
+          : 'sync';
+
+      void initializeGameSession({
+        mode: reconnectMode,
+        gameId: gameIdRef.current,
+        cartels: sessionCartelsRef.current,
+        stake,
+        handlers: sessionHandlersRef.current,
+      }).then(handleSessionInitResult);
     };
     const onDisconnect = () => setSocketConnected(false);
 
@@ -1047,144 +1049,48 @@ export default function MainGame() {
       setMySocketId(socket.id);
     }
 
-    const syncSession = (sessionGameId) => {
-      if (!sessionGameId) return;
-      socket.emit('game:state', { gameId: sessionGameId }, (ack) => {
-        if (ack?.ok !== false) {
-          syncFromServer(omitBallFields(ack));
-          applyBallDrawPayloadRef.current(ack, 'game:sync');
-          applyPendingWinner(ack);
-        }
-      });
-    };
-
     const joinCartels = sessionCartelsRef.current;
+    let entryMode = 'none';
 
     if (isRejoinSession && !joinedRef.current) {
-      joinedRef.current = true;
-
-      socket.emit(
-        'game:rejoin',
-        {
-          gameId: state?.gameId ?? gameIdRef.current,
-          userId: getPlayerUserId(),
-          playerName: getPlayerUserId(),
-        },
-        (ack) => {
-          if (ack?.ok === false) {
-            joinedRef.current = false;
-            console.warn('[socket] game:rejoin failed', ack.error);
-            navigate('/card-selection', { replace: true });
-            return;
-          }
-          adoptGameId(ack);
-          syncFromServer(omitBallFields(ack));
-          const cartels = (ack.myCartels ?? ack.selectedCartels ?? joinCartels).map(
-            Number
-          );
-          if (cartels.length > 0) {
-            sessionCartelsRef.current = cartels;
-            setMyCartels(cartels);
-          }
-          applyBallDrawPayloadRef.current(ack, 'game:rejoin');
-          applyPendingWinner(ack);
-          if (ack.manualMarks) {
-            setManualMarks(deserializeManualMarks(ack.manualMarks));
-          }
-          if (typeof ack.automatic === 'boolean') setAutomatic(ack.automatic);
-        }
-      );
+      entryMode = 'rejoin';
     } else if (joinCartels.length > 0 && !joinedRef.current) {
-      joinedRef.current = true;
-
-      socket.emit(
-        'game:join',
-        {
-          gameId: state?.gameId ?? gameIdRef.current ?? undefined,
-          selectedCartels: joinCartels,
-          cartelIds: joinCartels,
-          cartels: joinCartels,
-          playerName: getPlayerUserId(),
-          userId: getPlayerUserId(),
-          stake,
-          autoStart: false,
-          startRound: false,
-        },
-        (ack) => {
-          if (ack?.ok === false) {
-            joinedRef.current = false;
-            console.warn('[socket] game:join failed', ack.error);
-            return;
-          }
-          adoptGameId(ack);
-          syncFromServer(omitBallFields(ack));
-          const sessionGameId = ack?.gameId ?? state?.gameId;
-          const joinBalls = normalizeCalledNumbers(ack);
-          const gameStatus = normalizeGameStatus(ack);
-          const roundRunning =
-            gameStatus === GAME_STATUS.RUNNING ||
-            ack?.status === 'calling' ||
-            ack?.alreadyStarted === true;
-
-          if (joinBalls.length > 0) {
-            applyBallDrawPayloadRef.current(ack, 'game:rejoin');
-          }
-          applyPendingWinner(ack);
-          if (!roundRunning && joinBalls.length === 0) {
-            syncSession(sessionGameId);
-          }
-
-          if (
-            !roundRunning &&
-            ack?.status === 'waiting' &&
-            joinCartels.length > 0 &&
-            sessionGameId
-          ) {
-            socket.emit(
-              'game:round-start',
-              {
-                gameId: sessionGameId,
-                selectedCartels: joinCartels,
-                cartelIds: joinCartels,
-                playerName: getPlayerUserId(),
-                userId: getPlayerUserId(),
-                forceStart: true,
-              },
-              (startAck) => {
-                if (startAck?.ok === false) {
-                  console.warn('[socket] game:round-start failed', startAck.error);
-                  return;
-                }
-                void prepareGameAudioForRound();
-                adoptGameId(startAck);
-                syncFromServer(omitBallFields(startAck));
-                applyBallDrawPayloadRef.current(startAck, 'game:sync');
-                applyPendingWinner(startAck);
-              }
-            );
-          }
-        }
-      );
+      entryMode = 'join';
     } else if (isWatchingOnly && !joinedRef.current) {
+      entryMode = 'watch';
+    } else if (state?.gameId && !isRejoinSession && !joinedRef.current) {
+      entryMode = 'sync';
+    }
+
+    sessionHandlersRef.current = {
+      adoptGameId,
+      applyServerSnapshot: (ack) => syncFromServer(omitBallFields(ack)),
+      applyBallDraw: (ack, source) =>
+        applyBallDrawPayloadRef.current(ack, source),
+      applyPendingWinner,
+      setManualMarks: (raw) => setManualMarks(deserializeManualMarks(raw)),
+      setAutomatic,
+      setMyCartels,
+      updateSessionCartels: (cartels) => {
+        sessionCartelsRef.current = cartels;
+      },
+    };
+
+    if (entryMode !== 'none') {
       joinedRef.current = true;
-      joinAsWatcher(getPlayerUserId(), state?.gameId ?? gameIdRef.current).then(
-        (ack) => {
-          if (ack?.ok === false) {
-            joinedRef.current = false;
-            console.warn('[socket] game:watch failed', ack.error);
-            return;
-          }
-          syncFromServer(omitBallFields(ack));
-          applyBallDrawPayloadRef.current(ack, 'game:sync');
-          applyPendingWinner(ack);
-          if (ack?.gameId) setGameId(ack.gameId);
-        }
-      );
-    } else if (state?.gameId && !isRejoinSession) {
-      syncSession(state.gameId);
+      void initializeGameSession({
+        mode: entryMode,
+        gameId: state?.gameId ?? gameIdRef.current,
+        cartels: joinCartels,
+        stake,
+        handlers: sessionHandlersRef.current,
+      }).then(handleSessionInitResult);
     }
 
     return () => {
+      invalidateGameSessionGeneration();
+      joinedRef.current = false;
+      sessionLiveRef.current = false;
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
     socket.off('newNumber', onNumberCalled);
@@ -1212,6 +1118,7 @@ export default function MainGame() {
     syncRejoinCalledBalls,
     applyPendingWinner,
     navigate,
+    handleSessionInitResult,
   ]);
 
   useEffect(() => {

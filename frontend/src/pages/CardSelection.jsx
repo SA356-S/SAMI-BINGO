@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { fetchGameData } from '../api/cardSelection';
@@ -11,16 +11,11 @@ import {
   updateSelectedCartels,
   applyLobbyPayload,
 } from '../services/lobbySession';
-import { isMainGameAutoEntryBlocked } from '../services/gameSessionLifecycle';
 import { getPlayerUserId, initTelegramWebApp } from '../api/playerIdentity';
 import {
   bindAudioUnlockOnInteraction,
   unlockGameAudio,
 } from '../audio/gameSounds';
-import {
-  buildMainGameEntryState,
-  isLobbyGameStarted,
-} from '../utils/mainGameEntry';
 
 /** Fixed game entry cost shown in STAKE box (always 10 Birr) */
 const GAME_ENTRY_STAKE = 10;
@@ -139,7 +134,6 @@ export default function CardSelection() {
   const [mainWallet, setMainWallet] = useState(0);
   const [playWallet, setPlayWallet] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const enteredMainGameRef = useRef(false);
 
   const selectedCartels = lobby.selectedCartels;
   const otherTakenCartels = lobby.takenCartels;
@@ -171,37 +165,6 @@ export default function CardSelection() {
   );
 
   useEffect(() => subscribeLobby(setLobby), []);
-
-  const enterMainGameFromLobby = useCallback(() => {
-    if (enteredMainGameRef.current) return;
-    if (isMainGameAutoEntryBlocked()) return;
-    if (!isLobbyGameStarted(lobby)) return;
-    enteredMainGameRef.current = true;
-    void unlockGameAudio();
-
-    navigate('/main-game', {
-      replace: true,
-      state: buildMainGameEntryState({
-        selectedCartels,
-        gameId,
-        playersCount: lobby.playersCount,
-        stake: GAME_ENTRY_STAKE,
-      }),
-    });
-  }, [navigate, selectedCartels, gameId, lobby.playersCount, lobby]);
-
-  useEffect(() => {
-    if (enteredMainGameRef.current) return;
-    if (isMainGameAutoEntryBlocked()) return;
-    if (!isLobbyGameStarted(lobby)) return;
-    enterMainGameFromLobby();
-  }, [
-    lobby.lobbyPhase,
-    lobby.gameStatus,
-    lobby.gameInProgress,
-    enterMainGameFromLobby,
-    lobby,
-  ]);
 
   const toggleCartel = useCallback(
     (num) => {
@@ -294,7 +257,6 @@ export default function CardSelection() {
   }, [loadGameData]);
 
   useEffect(() => {
-    enteredMainGameRef.current = false;
     initTelegramWebApp();
     loadGameData();
   }, [loadGameData]);

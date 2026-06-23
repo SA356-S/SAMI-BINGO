@@ -46,11 +46,115 @@ export function getSocket() {
       path: '/socket.io',
       auth,
     });
+
+    import('../services/lobbySession')
+      .then(({ rebindLobbySocketHandlers }) => rebindLobbySocketHandlers())
+      .catch(() => {});
+    import('../audio/gameAudioSync')
+      .then(({ rebindGameAudioSync }) => rebindGameAudioSync())
+      .catch(() => {});
   } else if (auth.userId && !socketInstance.connected) {
     socketInstance.connect();
   }
 
   return socketInstance;
+}
+
+const SOCKET_CONNECT_TIMEOUT_MS = 12000;
+const SOCKET_RETRY_ATTEMPTS = 3;
+const SOCKET_RETRY_MIN_MS = 500;
+const SOCKET_RETRY_MAX_MS = 1500;
+
+function socketRetryDelayMs(attemptIndex) {
+  return Math.min(
+    SOCKET_RETRY_MAX_MS,
+    SOCKET_RETRY_MIN_MS + attemptIndex * 350
+  );
+}
+
+/** Wait until the shared socket is connected (or timeout). */
+export function ensureSocketConnected(timeoutMs = SOCKET_CONNECT_TIMEOUT_MS) {
+  const socket = getSocket();
+  if (socket.connected) {
+    return Promise.resolve(socket);
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const finish = (err, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.off('connect', onConnect);
+      socket.off('connect_error', onConnectError);
+      if (err) reject(err);
+      else resolve(value);
+    };
+
+    const onConnect = () => finish(null, socket);
+    const onConnectError = (err) =>
+      finish(err ?? new Error('socket_connect_error'));
+
+    const timer = setTimeout(
+      () => finish(new Error('socket_connect_timeout')),
+      timeoutMs
+    );
+
+    socket.on('connect', onConnect);
+    socket.on('connect_error', onConnectError);
+    if (!socket.connected) {
+      socket.connect();
+    }
+  });
+}
+
+/**
+ * Retry socket connection up to 3 times with backoff (500–1500ms).
+ * Never throws into callers that must stay alive — returns null on total failure.
+ */
+export async function ensureSocketConnectedWithRetry(options = {}) {
+  const maxAttempts = options.maxAttempts ?? SOCKET_RETRY_ATTEMPTS;
+  const timeoutMs = options.timeoutMs ?? SOCKET_CONNECT_TIMEOUT_MS;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (attempt > 0) {
+      const delayMs = socketRetryDelayMs(attempt - 1);
+      console.log('[game-init] SOCKET_CONNECTING', {
+        attempt: attempt + 1,
+        maxAttempts,
+        delayMs,
+      });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    } else {
+      console.log('[game-init] SOCKET_CONNECTING', { attempt: 1, maxAttempts });
+    }
+
+    try {
+      const socket = await ensureSocketConnected(timeoutMs);
+      console.log('[game-init] SOCKET_READY', { attempt: attempt + 1 });
+      return socket;
+    } catch (err) {
+      lastError = err;
+      console.warn('[game-init] SOCKET_CONNECTING failed', {
+        attempt: attempt + 1,
+        reason: err?.message ?? String(err),
+      });
+      try {
+        const socket = getSocket();
+        if (socket.connected) socket.disconnect();
+      } catch {
+        /* ignore disconnect errors during retry */
+      }
+    }
+  }
+
+  console.warn('[game-init] INIT_FAILED', {
+    step: 'socket',
+    reason: lastError?.message ?? 'socket_connect_failed',
+  });
+  return null;
 }
 
 export function disconnectSocket() {
@@ -65,6 +169,9 @@ export function disconnectSocket() {
 export function connectSocketWithTelegramAuth() {
   disconnectSocket();
   const socket = getSocket();
+  import('../services/lobbySession')
+    .then(({ rebindLobbySocketHandlers }) => rebindLobbySocketHandlers())
+    .catch(() => {});
   import('../audio/gameAudioSync')
     .then(({ rebindGameAudioSync }) => rebindGameAudioSync())
     .catch(() => {});

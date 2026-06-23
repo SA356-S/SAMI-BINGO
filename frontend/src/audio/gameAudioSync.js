@@ -58,6 +58,15 @@ function resetAudioSession() {
   resetAnnouncedBalls();
 }
 
+/** Reset audio dedupe/session state when entering a new MainGame round. */
+export function resetGameAudioForEntry(gameId = null) {
+  lastBallSequence = 0;
+  activeGameId = gameId != null ? String(gameId) : null;
+  resetBallSoundQueue();
+  resetBingoWinSound();
+  resetAnnouncedBalls();
+}
+
 function flushDeferredAudioReset() {
   if (!deferredAudioReset || bingoEndAudioBusy) return;
   deferredAudioReset = false;

@@ -8,9 +8,11 @@ import {
   isLobbyGameStarted,
 } from '../utils/mainGameEntry';
 import {
+  canAutoNavigateToMainGame,
   isMainGameAutoEntryBlocked,
   releaseMainGameAutoEntry,
-} from './sessionLifecycleFlags';
+} from './gameSessionLifecycle';
+import { unlockGameAudio } from '../audio/gameSounds';
 
 function activeUserId() {
   return getPlayerUserId() || getLastBootstrapUserId();
@@ -44,6 +46,8 @@ let state = {
 
 const listeners = new Set();
 let socketHandlersRegistered = false;
+/** @type {import('socket.io-client').Socket | null} */
+let lobbyBoundSocket = null;
 let localTickTimer = null;
 let selectionSyncInFlight = false;
 let selectionSyncGeneration = 0;
@@ -60,10 +64,11 @@ function releaseMainGameAutoEntryIfIdle() {
 
 function maybeNavigateToMainGame() {
   if (!navigateRef || gameStartNavigateDone) return;
-  if (isMainGameAutoEntryBlocked()) return;
+  if (!canAutoNavigateToMainGame()) return;
   if (!isLobbyGameStarted(state)) return;
 
   gameStartNavigateDone = true;
+  void unlockGameAudio();
   navigateRef('/main-game', {
     replace: true,
     state: buildMainGameEntryState({
@@ -182,7 +187,7 @@ function mergeServerCartels(serverCartels) {
 
 export function applyLobbyPayload(
   payload = {},
-  { mergeCartels = false, mergeTaken = true } = {}
+  { mergeCartels = false, mergeTaken = true, replace = false } = {}
 ) {
   if (!payload || typeof payload !== 'object') return;
 
@@ -197,13 +202,18 @@ export function applyLobbyPayload(
     state.lobbyPhase = payload.lobbyPhase ?? payload.phase ?? 'COUNTDOWN_RUNNING';
     state.countdownExpiredSignaled = false;
     releaseMainGameAutoEntryIfIdle();
+  } else if (replace) {
+    const serverCartels = payload.myCartels ?? payload.selectedCartels;
+    state.selectedCartels = Array.isArray(serverCartels)
+      ? serverCartels.map(Number).filter((n) => n >= 1)
+      : [];
   } else if (mergeCartels) {
     mergeServerCartels(payload.myCartels ?? payload.selectedCartels);
   }
 
   if (payload.gameId) state.gameId = payload.gameId;
 
-  if (mergeTaken) {
+  if (mergeTaken || replace) {
     const others =
       payload.takenByOthers ?? payload.takenByOther ?? null;
     const taken = payload.takenCartels ?? payload.taken ?? payload.occupied;
@@ -214,6 +224,8 @@ export function applyLobbyPayload(
       state.takenCartels = new Set(
         taken.map(Number).filter((n) => n >= 1 && !mine.has(n))
       );
+    } else if (replace) {
+      state.takenCartels = new Set();
     }
   }
 
@@ -351,7 +363,7 @@ export function updateSelectedCartels(cartels) {
   syncSelectionToServer();
 }
 
-async function refreshFromApi() {
+async function refreshFromApi({ replace = false } = {}) {
   const userId = activeUserId();
   const data = await fetchGameData(userId);
   applyLobbyPayload(
@@ -370,7 +382,7 @@ async function refreshFromApi() {
       gameInProgress: data.gameInProgress,
       gameStatus: data.gameStatus,
     },
-    { mergeCartels: true, mergeTaken: true }
+    { mergeCartels: !replace, mergeTaken: true, replace }
   );
 }
 
@@ -411,11 +423,24 @@ function ensureLocalCountdownTicker() {
   onLocalCountdownTick();
 }
 
+function unbindLobbySocketHandlers(socket) {
+  if (!socket) return;
+  socket.off('game:lobby-tick', socket.__onLobbyTick);
+  socket.off('game:started', socket.__onGameStart);
+  socket.off('game_start', socket.__onGameStart);
+  socket.off('game:start', socket.__onGameStart);
+  socket.off('game:selection-update', socket.__onSelectionUpdate);
+  socket.off('game:reset', socket.__onGameReset);
+  socket.off('game:redirect', socket.__onGameReset);
+  socket.off('connect', socket.__onLobbyConnect);
+}
+
 function registerLobbySocketHandlers() {
   if (socketHandlersRegistered) return;
-  socketHandlersRegistered = true;
 
   const socket = getSocket();
+  socketHandlersRegistered = true;
+  lobbyBoundSocket = socket;
 
   const onLobbyTick = (payload) => {
     applyLobbyPayload(payload, { mergeCartels: false, mergeTaken: true });
@@ -462,6 +487,19 @@ function registerLobbySocketHandlers() {
     });
   };
 
+  const onLobbyConnect = () => {
+    register();
+    if (state.selectedCartels.length > 0) {
+      syncSelectionToServer();
+    }
+  };
+
+  socket.__onLobbyTick = onLobbyTick;
+  socket.__onGameStart = onGameStart;
+  socket.__onSelectionUpdate = onSelectionUpdate;
+  socket.__onGameReset = onGameReset;
+  socket.__onLobbyConnect = onLobbyConnect;
+
   socket.on('game:lobby-tick', onLobbyTick);
   socket.on('game:started', onGameStart);
   socket.on('game_start', onGameStart);
@@ -469,21 +507,26 @@ function registerLobbySocketHandlers() {
   socket.on('game:selection-update', onSelectionUpdate);
   socket.on('game:reset', onGameReset);
   socket.on('game:redirect', onGameReset);
-
-  socket.on('connect', () => {
-    register();
-    if (state.selectedCartels.length > 0) {
-      syncSelectionToServer();
-    }
-  });
+  socket.on('connect', onLobbyConnect);
 
   if (socket.connected) {
     register();
-  } else {
-    socket.once('connect', register);
   }
 
   logCountdown('socket-handlers-registered');
+}
+
+/** Re-attach lobby handlers after socket recycle (removeAllListeners). */
+export function rebindLobbySocketHandlers() {
+  const socket = getSocket();
+  if (lobbyBoundSocket === socket && socketHandlersRegistered) {
+    return;
+  }
+  if (lobbyBoundSocket) {
+    unbindLobbySocketHandlers(lobbyBoundSocket);
+  }
+  socketHandlersRegistered = false;
+  registerLobbySocketHandlers();
 }
 
 /**
@@ -516,9 +559,20 @@ export function resetLobbySessionState() {
 
 /** Async server sync after clearGameSession(); releases auto-entry block when idle. */
 export function scheduleLobbyResyncAfterSessionClear() {
-  void refreshFromApi().finally(() => {
+  void refreshFromApi({ replace: true }).finally(() => {
     releaseMainGameAutoEntryIfIdle();
   });
+}
+
+/** Async full lobby snapshot from server (replace local cache, no merge). */
+export async function resyncLobbySnapshotForSession() {
+  try {
+    await refreshFromApi({ replace: true });
+    return { ok: true };
+  } catch (err) {
+    console.warn('[game-init] LOBBY_SYNC failed', err?.message ?? err);
+    return { ok: false, error: err?.message ?? 'lobby_sync_failed' };
+  }
 }
 
 /** Lifecycle: stop the local lobby countdown ticker while backgrounded. */
