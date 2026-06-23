@@ -48,7 +48,12 @@ let ballSoundsSuppressed = false;
 
 let cacheInitialized = false;
 let audioUnlocked = false;
+/** True after prepareGameAudioForRound() — ball sounds wait until this is set. */
+let roundAudioReady = false;
 let lifecycleAudioSuspended = false;
+
+/** @type {{ number: number; options: { source: string; forceLive: boolean }; resolve: (ok: boolean) => void }[]} */
+const preReadyBallBuffer = [];
 
 /** @type {{ number: number; source: string; onComplete?: (ok: boolean) => void }[]} */
 const ballPlayQueue = [];
@@ -162,14 +167,42 @@ export async function unlockGameAudio() {
   }
 }
 
-/** Unlock + preload once when entering a live round. */
+/** Unlock + preload once when entering a live round; marks audio ready and flushes buffered balls. */
 export async function prepareGameAudioForRound() {
+  roundAudioReady = false;
   ensureBallCache();
   await unlockGameAudio();
   try {
     await preloadBallCallSounds();
   } catch (err) {
     console.log('[bingo-audio] preload skipped:', err?.message || err);
+  }
+  roundAudioReady = true;
+  logInfo('AUDIO_READY');
+  flushPreReadyBallBuffer();
+}
+
+export function isRoundAudioReady() {
+  return roundAudioReady;
+}
+
+export function resetRoundAudioReady() {
+  roundAudioReady = false;
+}
+
+function flushPreReadyBallBuffer() {
+  if (preReadyBallBuffer.length === 0) return;
+  const pending = preReadyBallBuffer.splice(0);
+  logInfo('flushing pre-ready ball buffer', { count: pending.length });
+  for (const item of pending) {
+    playBallCallSoundAndWait(item.number, item.options).then(item.resolve);
+  }
+}
+
+function clearPreReadyBallBuffer() {
+  while (preReadyBallBuffer.length > 0) {
+    const item = preReadyBallBuffer.shift();
+    item?.resolve?.(false);
   }
 }
 
@@ -472,6 +505,16 @@ export function playBallCallSoundAndWait(
       return;
     }
 
+    if (!roundAudioReady) {
+      logInfo('announcer buffered — audio not ready', { ball: n, source });
+      preReadyBallBuffer.push({
+        number: n,
+        options: { source, forceLive },
+        resolve,
+      });
+      return;
+    }
+
     if (!forceLive && announcedBalls.has(n)) {
       logInfo('announcer skip — already in announced set', { ball: n, source });
       resolve(true);
@@ -663,6 +706,7 @@ export function playBallSound(number, options = {}) {
 export function resetBallSoundQueue() {
   stopActiveAudio();
   clearBallQueue();
+  clearPreReadyBallBuffer();
   queueProcessing = false;
   resetAnnouncedBalls();
   if (!bingoWinPlayed) ballSoundsSuppressed = false;

@@ -8,6 +8,7 @@ import {
   resetAnnouncedBalls,
   resetBallSoundQueue,
   resetBingoWinSound,
+  resetRoundAudioReady,
   syncAnnouncedBallsFromHistory,
   unlockGameAudio,
   waitForBallAnnouncementIdle,
@@ -62,6 +63,7 @@ function resetAudioSession() {
 export function resetGameAudioForEntry(gameId = null) {
   lastBallSequence = 0;
   activeGameId = gameId != null ? String(gameId) : null;
+  resetRoundAudioReady();
   resetBallSoundQueue();
   resetBingoWinSound();
   resetAnnouncedBalls();
