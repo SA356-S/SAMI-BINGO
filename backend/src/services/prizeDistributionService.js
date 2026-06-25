@@ -2,7 +2,9 @@ const { validateBingoClaim } = require('../utils/bingoWin');
 const {
   creditBingoWin,
   emitWalletSnapshot,
+  flushWalletPersists,
 } = require('../socket/walletManager');
+const { runDeferred } = require('../utils/eventLoopDefer');
 
 function isRobotPlayer(player) {
   if (!player) return true;
@@ -94,13 +96,13 @@ function creditHumanWinners(io, humanWinners, sharePerWinner, prizePool = 0) {
   }
 
   const distributions = [];
+  const persistUserIds = [];
+  const snapshotTargets = [];
 
   for (const winner of humanWinners) {
-    const result = creditBingoWin(winner.userId, wholeShare);
-    const socket = io?.sockets?.sockets?.get?.(winner.socketId);
-    if (socket) {
-      emitWalletSnapshot(socket, result.wallet);
-    }
+    const result = creditBingoWin(winner.userId, wholeShare, { deferPersist: true });
+    persistUserIds.push(winner.userId);
+    snapshotTargets.push({ winner, wallet: result.wallet });
     distributions.push({
       userId: winner.userId,
       socketId: winner.socketId,
@@ -108,6 +110,17 @@ function creditHumanWinners(io, humanWinners, sharePerWinner, prizePool = 0) {
       amount: wholeShare,
     });
   }
+
+  flushWalletPersists(persistUserIds);
+
+  runDeferred(() => {
+    for (const { winner, wallet } of snapshotTargets) {
+      const socket = io?.sockets?.sockets?.get?.(winner.socketId);
+      if (socket) {
+        emitWalletSnapshot(socket, wallet);
+      }
+    }
+  });
 
   return {
     totalPaid: wholeShare * humanWinners.length,

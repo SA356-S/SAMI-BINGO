@@ -36,19 +36,17 @@ function createBot() {
     console.warn('[bot] handler error:', err?.message || err);
   });
 
-  bot.use(async (ctx, next) => {
+  bot.use((ctx, next) => {
     const from = ctx.from;
     if (from?.id) {
-      try {
-        await syncTelegramProfileFromClient({
-          telegramId: from.id,
-          username: from.username,
-          firstName: from.first_name,
-          lastName: from.last_name,
-        });
-      } catch (err) {
+      void syncTelegramProfileFromClient({
+        telegramId: from.id,
+        username: from.username,
+        firstName: from.first_name,
+        lastName: from.last_name,
+      }).catch((err) => {
         console.warn('[bot] user sync failed', from.id, err?.message);
-      }
+      });
     }
     return next();
   });

@@ -52,6 +52,8 @@ let localTickTimer = null;
 let selectionSyncInFlight = false;
 let selectionSyncGeneration = 0;
 let gameStartNavigateDone = false;
+let lastNotifyFingerprint = '';
+let lastLocalCountdownRemaining = null;
 
 const GAME_ENTRY_STAKE = 10;
 
@@ -87,7 +89,27 @@ function logCountdown(event, detail = {}) {
   });
 }
 
-function notify() {
+function lobbyNotifyFingerprint() {
+  const taken = [...state.takenCartels].sort((a, b) => a - b).join(',');
+  const selected = state.selectedCartels.join(',');
+  return [
+    state.gameId ?? '',
+    getCountdownRemaining(),
+    state.countdownEndsAt ?? '',
+    state.playersCount,
+    state.lobbyPhase ?? '',
+    state.gameStatus ?? '',
+    state.selectionLocked ? '1' : '0',
+    state.gameInProgress ? '1' : '0',
+    selected,
+    taken,
+  ].join('|');
+}
+
+function notify(force = false) {
+  const fp = lobbyNotifyFingerprint();
+  if (!force && fp === lastNotifyFingerprint) return;
+  lastNotifyFingerprint = fp;
   const snapshot = getLobbyState();
   listeners.forEach((fn) => fn(snapshot));
 }
@@ -388,6 +410,8 @@ async function refreshFromApi({ replace = false } = {}) {
 
 function onLocalCountdownTick() {
   const remaining = getCountdownRemaining();
+  const countdownChanged = remaining !== lastLocalCountdownRemaining;
+  lastLocalCountdownRemaining = remaining;
 
   if (state.lastLoggedRemaining !== remaining) {
     if (remaining % 5 === 0 || remaining <= 5 || state.lastLoggedRemaining == null) {
@@ -413,7 +437,9 @@ function onLocalCountdownTick() {
     state.countdownExpiredSignaled = false;
   }
 
-  notify();
+  if (countdownChanged) {
+    notify();
+  }
 }
 
 function ensureLocalCountdownTicker() {
@@ -554,7 +580,9 @@ export function resetLobbySessionState() {
   state.lobbyPhase = 'COUNTDOWN_RUNNING';
   state.countdownExpiredSignaled = false;
   gameStartNavigateDone = false;
-  notify();
+  lastNotifyFingerprint = '';
+  lastLocalCountdownRemaining = null;
+  notify(true);
 }
 
 /** Async server sync after clearGameSession(); releases auto-entry block when idle. */

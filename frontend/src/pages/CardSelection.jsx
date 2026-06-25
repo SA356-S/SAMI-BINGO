@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, memo } from 'react';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { fetchGameData } from '../api/cardSelection';
@@ -61,7 +61,7 @@ function MetricBox({ label, value, isTimer = false, urgent = false }) {
   );
 }
 
-function CartelButton({ num, status, onToggle }) {
+const CartelButton = memo(function CartelButton({ num, status, onToggle }) {
   const base =
     'flex h-[clamp(24px,6.5vw,28px)] w-full min-w-0 touch-manipulation items-center justify-center rounded-md border text-[clamp(11px,3.2vw,13px)] font-bold leading-none tabular-nums transition';
 
@@ -92,7 +92,7 @@ function CartelButton({ num, status, onToggle }) {
       {num}
     </button>
   );
-}
+});
 
 function CartelBoardPanel({ selectionCount, selectedCartels, isDual }) {
   return (
@@ -150,6 +150,15 @@ export default function CardSelection() {
     [selectedCartels, otherTakenCartels]
   );
 
+  const cartelStatusByNum = useMemo(() => {
+    const map = new Map();
+    for (let i = 0; i < ALL_CARTELS.length; i += 1) {
+      const num = ALL_CARTELS[i];
+      map.set(num, getCartelStatus(num));
+    }
+    return map;
+  }, [getCartelStatus]);
+
   const totalWalletBalance = mainWallet + playWallet;
   const canAffordNextCartel =
     totalWalletBalance >= GAME_ENTRY_STAKE * (selectedCartels.length + 1);
@@ -164,7 +173,28 @@ export default function CardSelection() {
     [navigate]
   );
 
-  useEffect(() => subscribeLobby(setLobby), []);
+  useEffect(() => {
+    return subscribeLobby((snap) => {
+      setLobby((prev) => {
+        if (
+          prev.gameId === snap.gameId &&
+          prev.countdownSeconds === snap.countdownSeconds &&
+          prev.playersCount === snap.playersCount &&
+          prev.selectionLocked === snap.selectionLocked &&
+          prev.gameInProgress === snap.gameInProgress &&
+          prev.lobbyPhase === snap.lobbyPhase &&
+          prev.gameStatus === snap.gameStatus &&
+          prev.selectedCartels.length === snap.selectedCartels.length &&
+          prev.selectedCartels.every((n, i) => n === snap.selectedCartels[i]) &&
+          prev.takenCartels.size === snap.takenCartels.size &&
+          [...prev.takenCartels].every((n) => snap.takenCartels.has(n))
+        ) {
+          return prev;
+        }
+        return snap;
+      });
+    });
+  }, []);
 
   const toggleCartel = useCallback(
     (num) => {
@@ -320,7 +350,7 @@ export default function CardSelection() {
               <CartelButton
                 key={num}
                 num={num}
-                status={getCartelStatus(num)}
+                status={cartelStatusByNum.get(num) ?? 'available'}
                 onToggle={toggleCartel}
               />
             ))}

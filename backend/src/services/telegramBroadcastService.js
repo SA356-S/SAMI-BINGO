@@ -7,6 +7,7 @@ const { getMiniAppUrl } = require('../config/miniAppUrl');
 
 const SEND_DELAY_MS = Number(process.env.TELEGRAM_BROADCAST_DELAY_MS) || 40;
 const MAX_RETRIES = Number(process.env.TELEGRAM_BROADCAST_RETRIES) || 3;
+const { yieldEventLoop } = require('../utils/eventLoopDefer');
 
 /** @type {import('telegraf').Telegram | null} */
 let telegramApi = null;
@@ -242,6 +243,7 @@ async function broadcastViaTelegramBot({ imageUrl, message, buttonText, buttonLi
     if (SEND_DELAY_MS > 0) {
       await sleep(SEND_DELAY_MS);
     }
+    await yieldEventLoop();
   }
 
   console.info('[notifications] Telegram bot broadcast finished', {

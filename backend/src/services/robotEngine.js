@@ -9,8 +9,10 @@ const { broadcastAdmin, emitGameStatus } = require('./adminService');
 
 const TICK_MS = 1000;
 const FETCH_ROBOTS_EVERY_MS = 3000;
+const { runDeferred } = require('../utils/eventLoopDefer');
 
 let intervalId = null;
+let tickInFlight = false;
 
 /** robotId -> runtime state */
 const runtime = new Map();
@@ -240,11 +242,17 @@ function startRobotEngine(io) {
   });
 
   intervalId = setInterval(() => {
-    try {
-      robotEngineTick(io);
-    } catch (err) {
-      console.warn('[robots] engine tick failed:', err?.message || err);
-    }
+    if (tickInFlight) return;
+    tickInFlight = true;
+    runDeferred(() => {
+      try {
+        robotEngineTick(io);
+      } catch (err) {
+        console.warn('[robots] engine tick failed:', err?.message || err);
+      } finally {
+        tickInFlight = false;
+      }
+    });
   }, TICK_MS);
 
   console.log('[robots] robotEngine started');

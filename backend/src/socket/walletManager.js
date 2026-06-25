@@ -269,27 +269,41 @@ async function debitWithdrawAsync(userId, amount) {
   };
 }
 
-function creditBingoWin(userId, amount) {
+function creditBingoWin(userId, amount, options = {}) {
   const key = String(userId);
   const wallet = getOrInitWallet(key);
   const value = Math.floor(Math.max(0, Number(amount) || 0));
+  const deferPersist = options.deferPersist === true;
   if (value <= 0) {
     return { ok: false, error: 'Invalid prize amount', wallet };
   }
 
   wallet.main += value;
-  void persistWalletAsync(key);
-  return { ok: true, wallet, credited: value };
+  if (!deferPersist) {
+    void persistWalletAsync(key);
+  }
+  return { ok: true, wallet, credited: value, userId: key };
+}
+
+function flushWalletPersists(userIds) {
+  const seen = new Set();
+  for (const raw of userIds) {
+    const key = String(raw || '').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    void persistWalletAsync(key);
+  }
 }
 
 /**
  * Deduct from Play Wallet first, then fall back to Main Wallet.
  * Main Wallet should behave like Play Wallet for gameplay charges.
  */
-function deductGameplayBalance(userId, amount) {
+function deductGameplayBalance(userId, amount, options = {}) {
   const key = String(userId);
   const wallet = getOrInitWallet(key);
   const value = Math.max(0, Number(amount) || 0);
+  const deferPersist = options.deferPersist === true;
 
   if (value <= 0) {
     return { ok: false, error: 'Invalid deduction amount', wallet };
@@ -317,13 +331,16 @@ function deductGameplayBalance(userId, amount) {
 
   wallet.play = play - fromPlay;
   wallet.main = main - fromMain;
-  void persistWalletAsync(key);
+  if (!deferPersist) {
+    void persistWalletAsync(key);
+  }
 
   return {
     ok: true,
     wallet,
     deducted: value,
     from: { play: fromPlay, main: fromMain },
+    userId: key,
   };
 }
 
@@ -487,14 +504,26 @@ function chargeSessionEntryStakes(session, io) {
     }
   }
 
-  // Deduct humans after robot bank preflight.
-  for (const { player, userId, amount } of pendingHumans) {
-    const result = deductGameplayBalance(userId, amount);
-    if (!result.ok) return result;
+  // Deduct humans after robot bank preflight (batch persist after loop).
+  const chargedUserIds = [];
+  const walletSnapshotTargets = [];
 
-    const socket = io.sockets.sockets.get(player.socketId);
-    if (socket) emitWalletSnapshot(socket, result.wallet);
+  for (const { player, userId, amount } of pendingHumans) {
+    const result = deductGameplayBalance(userId, amount, { deferPersist: true });
+    if (!result.ok) return result;
+    chargedUserIds.push(String(userId));
+    walletSnapshotTargets.push({ player, userId });
   }
+
+  flushWalletPersists(chargedUserIds);
+
+  const { runDeferred } = require('../utils/eventLoopDefer');
+  runDeferred(() => {
+    for (const { player, userId } of walletSnapshotTargets) {
+      const socket = io.sockets.sockets.get(player.socketId);
+      if (socket) emitWalletSnapshot(socket, getOrInitWallet(userId));
+    }
+  });
 
   const totalPool = computeTotalPool(session);
   const { houseShare, prizePool } = splitPool(totalPool);
@@ -610,6 +639,7 @@ module.exports = {
   emitWalletSnapshot,
   hydrateWalletCacheFromDb,
   persistWalletAsync,
+  flushWalletPersists,
   GAME_ENTRY_STAKE,
   HOUSE_COMMISSION_RATE,
 };

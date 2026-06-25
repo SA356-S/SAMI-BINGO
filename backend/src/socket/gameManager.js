@@ -6,6 +6,7 @@ const {
   emitRoomIfChanged,
   clearRoomBroadcastCache,
 } = require('./roomBroadcast');
+const { runDeferred } = require('../utils/eventLoopDefer');
 
 const DEBUG_BINGO_DRAW = process.env.DEBUG_BINGO_DRAW === 'true';
 const {
@@ -85,15 +86,32 @@ class GameSession {
     this._seatedCountCache = null;
     this._totalCartelsCache = null;
     this._takenCartelsArrayCache = null;
+    /** Monotonic epoch — fingerprint cartela/roster changes without scanning arrays */
+    this._roomStateEpoch = 0;
+    this._cachedPublicGameStatus = null;
+    this._cachedPublicGameStatusKey = null;
+    /** Per-second lobby core fields reused across tick payloads */
+    this._roomLobbyCoreCache = null;
+    this._roomLobbyCoreTick = -1;
+    this._lastBallEmitSequence = 0;
+  }
+
+  _broadcastOpts(extra = {}) {
+    return { stateEpoch: this._roomStateEpoch, ...extra };
   }
 
   /** Invalidate derived player/lobby caches after cartel or roster mutations. */
   _bumpRoomState() {
+    this._roomStateEpoch += 1;
     this._playersListCache = null;
     this._seatedPlayersCache = null;
     this._seatedCountCache = null;
     this._totalCartelsCache = null;
     this._takenCartelsArrayCache = null;
+    this._roomLobbyCoreCache = null;
+    this._roomLobbyCoreTick = -1;
+    this._cachedPublicGameStatus = null;
+    this._cachedPublicGameStatusKey = null;
     clearRoomBroadcastCache(this._roomBroadcastCache);
   }
 
@@ -207,10 +225,41 @@ class GameSession {
 
   /** Public phase for clients: WAITING | RUNNING | FINISHED */
   getPublicGameStatus() {
-    const s = String(this.status ?? 'waiting').toLowerCase();
-    if (s === 'calling') return 'RUNNING';
-    if (s === 'ended' || s === 'finished') return 'FINISHED';
-    return 'WAITING';
+    const key = String(this.status ?? 'waiting').toLowerCase();
+    if (this._cachedPublicGameStatusKey === key && this._cachedPublicGameStatus) {
+      return this._cachedPublicGameStatus;
+    }
+    let value;
+    if (key === 'calling') value = 'RUNNING';
+    else if (key === 'ended' || key === 'finished') value = 'FINISHED';
+    else value = 'WAITING';
+    this._cachedPublicGameStatusKey = key;
+    this._cachedPublicGameStatus = value;
+    return value;
+  }
+
+  /** Shared lobby fields rebuilt at most once per wall-clock second. */
+  _getRoomLobbyCore() {
+    const tick = Math.floor(Date.now() / 1000);
+    if (this._roomLobbyCoreCache && this._roomLobbyCoreTick === tick) {
+      return this._roomLobbyCoreCache;
+    }
+    this._roomLobbyCoreTick = tick;
+    this._roomLobbyCoreCache = {
+      gameId: this.gameId,
+      status: this.status,
+      gameStatus: this.getPublicGameStatus(),
+      lobbyPhase: this.lobbyPhase,
+      phase: this.lobbyPhase,
+      countdownSeconds: this.getLobbyCountdownRemaining(),
+      countdownEndsAt: this.lobbyCountdownEndsAt,
+      serverTime: Date.now(),
+      takenCartels: this.getTakenCartelsArray(),
+      playersCount: this.playersCount,
+      selectionLocked: this.isSelectionLocked(),
+      gameInProgress: this.status === 'calling',
+    };
+    return this._roomLobbyCoreCache;
   }
 
   /**
@@ -225,44 +274,27 @@ class GameSession {
       'game:selection-update',
       roomPayload,
       this._roomBroadcastCache,
-      'selectionUpdate'
+      'selectionUpdate',
+      this._broadcastOpts()
     );
   }
 
   buildLobbySelectionPayload() {
-    return {
-      gameId: this.gameId,
-      status: this.status,
-      gameStatus: this.getPublicGameStatus(),
-      lobbyPhase: this.lobbyPhase,
-      phase: this.lobbyPhase,
-      countdownSeconds: this.getLobbyCountdownRemaining(),
-      countdownEndsAt: this.lobbyCountdownEndsAt,
-      serverTime: Date.now(),
-      takenCartels: this.getTakenCartelsArray(),
-      playersCount: this.playersCount,
-      selectionLocked: this.isSelectionLocked(),
-      gameInProgress: this.status === 'calling',
-    };
+    return { ...this._getRoomLobbyCore() };
   }
 
   buildWaitingLobbyTickPayload() {
-    const sync = {
-      ...this.toLobbySyncPayload(),
+    return {
+      ...this._getRoomLobbyCore(),
       lobbyPhase: LOBBY_PHASE.COUNTDOWN_RUNNING,
       phase: LOBBY_PHASE.COUNTDOWN_RUNNING,
-    };
-    return {
-      ...sync,
-      takenCartels: this.getTakenCartelsArray(),
-      selectionLocked: this.isSelectionLocked(),
       gameInProgress: false,
     };
   }
 
   buildCallingLobbyTickPayload() {
     return {
-      ...this.toLobbySyncPayload(),
+      ...this._getRoomLobbyCore(),
       gameInProgress: true,
       selectionLocked: true,
       status: 'calling',
@@ -276,7 +308,8 @@ class GameSession {
       'game:lobby-tick',
       this.buildWaitingLobbyTickPayload(),
       this._roomBroadcastCache,
-      'lobbyTickWaiting'
+      'lobbyTickWaiting',
+      this._broadcastOpts()
     );
   }
 
@@ -288,7 +321,7 @@ class GameSession {
       this.buildCallingLobbyTickPayload(),
       this._roomBroadcastCache,
       'lobbyTickCalling',
-      { ignoreServerTime: true }
+      this._broadcastOpts({ ignoreServerTime: true })
     );
   }
 
@@ -313,7 +346,8 @@ class GameSession {
         'game:update',
         payload,
         this._roomBroadcastCache,
-        'gameUpdateSlim'
+        'gameUpdateSlim',
+        this._broadcastOpts()
       );
       return;
     }
@@ -338,7 +372,8 @@ class GameSession {
       'game:players',
       payload,
       this._roomBroadcastCache,
-      duringCalling ? 'playersSlim' : 'playersFull'
+      duringCalling ? 'playersSlim' : 'playersFull',
+      this._broadcastOpts()
     );
   }
 
@@ -359,18 +394,7 @@ class GameSession {
     const uid = userId ? String(userId) : null;
     const myCartels = uid ? this.getCartelsForUser(uid) : [];
     const payload = {
-      gameId: this.gameId,
-      status: this.status,
-      gameStatus: this.getPublicGameStatus(),
-      lobbyPhase: this.lobbyPhase,
-      phase: this.lobbyPhase,
-      countdownSeconds: this.getLobbyCountdownRemaining(),
-      countdownEndsAt: this.lobbyCountdownEndsAt,
-      serverTime: Date.now(),
-      takenCartels: this.getTakenCartelsArray(),
-      playersCount: this.playersCount,
-      selectionLocked: this.isSelectionLocked(),
-      gameInProgress: this.status === 'calling',
+      ...this._getRoomLobbyCore(),
       myCartels,
       selectedCartels: myCartels,
     };
@@ -819,32 +843,33 @@ class GameSession {
     }
 
     io.to(this.roomName).emit('newNumber', payload);
-    this.emitRoomAudio(io, 'ball_called', {
-      number: payload.number,
-      sequence: payload.sequence,
-      calledCount: payload.calledCount,
-      label: payload.label,
-      letter: payload.letter,
-      ballSync: 'live',
-    });
-    try {
-      const { emitNewNumber, emitGameStatus } = require('../services/adminService');
-      emitNewNumber(this, next);
-      emitGameStatus(this);
-    } catch {
-      /* admin optional */
-    }
-    console.log(
-      `[game] ball:called gameId=${this.gameId} ${formatBallCall(next)} room=${this.roomName}`
-    );
+    this._emitBallCalledAudio(io, payload);
 
-    if (this.status === 'calling' && !this.resetTimer) {
+    const sessionRef = this;
+    const drawnNumber = next;
+    runDeferred(() => {
       try {
-        const { evaluateRobotsAfterBallDraw } = require('../services/robotEngine');
-        evaluateRobotsAfterBallDraw(io, this);
+        const { emitNewNumber, emitGameStatus } = require('../services/adminService');
+        emitNewNumber(sessionRef, drawnNumber);
+        emitGameStatus(sessionRef);
       } catch {
-        /* robot win hook optional */
+        /* admin optional */
       }
+
+      if (sessionRef.status === 'calling' && !sessionRef.resetTimer) {
+        try {
+          const { evaluateRobotsAfterBallDraw } = require('../services/robotEngine');
+          evaluateRobotsAfterBallDraw(io, sessionRef);
+        } catch {
+          /* robot win hook optional */
+        }
+      }
+    });
+
+    if (!DEBUG_BINGO_DRAW) {
+      console.log(
+        `[game] ball:called gameId=${this.gameId} ${formatBallCall(next)} seq=${this.ballSequence}`
+      );
     }
     } finally {
       this._ballCallInFlight = false;
@@ -1271,19 +1296,21 @@ class GameSession {
       `[game] bingo winner gameId=${this.gameId} cartel=${primaryCartelId} label=${enrichedPayload.winnerLabel} prizePool=${enrichedPayload.prizePool} humanWinners=${prizeResult.humanWinnerCount} share=${prizeResult.prizeSharePerWinner} resetIn=${ROUND_END_DISPLAY_MS}ms`
     );
 
-    try {
-      const { recordRoundOutcome } = require('../services/statsService');
-      recordRoundOutcome(this, mergedWinnerInfo).catch((err) =>
-        console.warn('[stats] recordRoundOutcome failed', err.message)
-      );
-      const { recordCompletedGameProfit } = require('../services/dailyProfitService');
-      recordCompletedGameProfit(this, { totalPayouts: prizeResult.totalPaid }).catch(
-        (err) => console.warn('[daily-profit] record failed', err?.message || err)
-      );
-      io.emit('stats:update', { gameId: this.gameId });
-    } catch {
-      /* stats optional */
-    }
+    runDeferred(() => {
+      try {
+        const { recordRoundOutcome } = require('../services/statsService');
+        recordRoundOutcome(this, mergedWinnerInfo).catch((err) =>
+          console.warn('[stats] recordRoundOutcome failed', err.message)
+        );
+        const { recordCompletedGameProfit } = require('../services/dailyProfitService');
+        recordCompletedGameProfit(this, { totalPayouts: prizeResult.totalPaid }).catch(
+          (err) => console.warn('[daily-profit] record failed', err?.message || err)
+        );
+        io.emit('stats:update', { gameId: this.gameId });
+      } catch {
+        /* stats optional */
+      }
+    });
 
     this.winnerDisplayPayload = enrichedPayload;
 
@@ -1385,6 +1412,7 @@ class GameSession {
     }
     this.calledNumbers = [];
     this.ballSequence = 0;
+    this._lastBallEmitSequence = 0;
     this.winner = null;
     this.winnerDisplayPayload = null;
     this._winnerLocked = false;
@@ -1410,6 +1438,21 @@ class GameSession {
       gameId: this.gameId,
       serverTime: Date.now(),
       ...payload,
+    });
+  }
+
+  /** ball_called audio — always tied to ball sequence (never dedupe across draws). */
+  _emitBallCalledAudio(io, ballPayload) {
+    if (!io || !ballPayload) return;
+    if (this._lastBallEmitSequence === ballPayload.sequence) return;
+    this._lastBallEmitSequence = ballPayload.sequence;
+    this.emitRoomAudio(io, 'ball_called', {
+      number: ballPayload.number,
+      sequence: ballPayload.sequence,
+      calledCount: ballPayload.calledCount,
+      label: ballPayload.label,
+      letter: ballPayload.letter,
+      ballSync: 'live',
     });
   }
 
@@ -1696,16 +1739,25 @@ class GameSession {
       gameInProgress: true,
     };
 
+    const playersList = this.buildPlayersList();
+    const takenCartels = this.getTakenCartelsArray();
+    const calledNumbers = this.calledNumbers;
+
     for (const [socketId, player] of this.players) {
       const sock = io.sockets.sockets.get(socketId);
       if (!sock) continue;
 
       const uid = player.userId ? String(player.userId) : null;
+      const state = this.toPublicState(socketId, uid, { playersList });
+      state.calledNumbers = [...calledNumbers];
+      state.called = state.calledNumbers;
+      state.balls = state.calledNumbers;
+      state.takenCartels = takenCartels;
 
       if (!this.playerHasAnyCartelas(player)) {
         const watchPayload = {
           ...baseStart,
-          ...this.toPublicState(socketId, uid),
+          ...state,
           watchingOnly: true,
           myCartels: [],
           selectedCartels: [],
@@ -1719,7 +1771,7 @@ class GameSession {
 
       const payload = {
         ...baseStart,
-        ...this.toPublicState(socketId, uid),
+        ...state,
       };
       sock.emit('game:joined', payload);
       sock.emit('game:started', payload);
@@ -1729,8 +1781,8 @@ class GameSession {
 
     const roomStart = {
       ...baseStart,
-      ...this.toLobbySyncPayload(),
-      takenCartels: this.getTakenCartelsArray(),
+      ...this._getRoomLobbyCore(),
+      takenCartels,
       playersCount: this.playersCount,
     };
     io.to(this.roomName).emit('game:started', roomStart);
@@ -1780,7 +1832,7 @@ class GameManager {
 
         if (remaining <= 0 && !session._lobbyExpiredLatch) {
           session._lobbyExpiredLatch = true;
-          session.handleLobbyCountdownExpired(io);
+          runDeferred(() => session.handleLobbyCountdownExpired(io));
         } else if (remaining > 0) {
           session._lobbyExpiredLatch = false;
         }

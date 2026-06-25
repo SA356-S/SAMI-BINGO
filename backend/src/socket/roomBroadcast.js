@@ -2,15 +2,19 @@
 
 /**
  * Compact fingerprint for room-wide Socket.IO payload deduplication.
- * Excludes serverTime when requested so periodic ticks skip redundant emits.
+ * Prefer stateEpoch over full takenCartels arrays when provided.
  *
  * @param {object} payload
- * @param {{ ignoreServerTime?: boolean }} [opts]
+ * @param {{ ignoreServerTime?: boolean, stateEpoch?: number|null }} [opts]
  */
 function roomBroadcastFingerprint(payload, opts = {}) {
   const ignoreServerTime = opts.ignoreServerTime === true;
+  const stateEpoch = opts.stateEpoch;
+
   let takenKey = '';
-  if (Array.isArray(payload.takenCartels)) {
+  if (stateEpoch != null && Number.isFinite(stateEpoch)) {
+    takenKey = `e:${stateEpoch}`;
+  } else if (Array.isArray(payload.takenCartels)) {
     takenKey = payload.takenCartels.join(',');
   }
 
@@ -32,6 +36,9 @@ function roomBroadcastFingerprint(payload, opts = {}) {
     payload.totalCards ?? '',
     payload.derash ?? '',
     payload.pot ?? '',
+    payload.number ?? '',
+    payload.letter ?? '',
+    payload.label ?? '',
   ];
 
   if (Array.isArray(payload.players)) {

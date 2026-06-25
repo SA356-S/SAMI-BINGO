@@ -29,6 +29,7 @@ const {
 } = require('./utils/telegramAuth');
 const { verifyAdminToken } = require('./middleware/adminAuth');
 const { rejectIfBannedSocket } = require('./utils/banGate');
+const { runDeferred } = require('./utils/eventLoopDefer');
 const {
   emitGameStatus,
   getDashboardSnapshotAsync,
@@ -1087,8 +1088,10 @@ function registerSocketHandlers(io) {
         if (userId) gameManager.clearUserGame(userId);
       }
 
-      emitRoomPlayersChurn(session);
-      emitRoomGameUpdate(session, { lightweight: true });
+      runDeferred(() => {
+        emitRoomPlayersChurn(session);
+        emitRoomGameUpdate(session, { lightweight: true });
+      });
 
       console.log(`[socket] disconnected ${socket.id} from ${gameId}`);
     });
