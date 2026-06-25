@@ -9,17 +9,13 @@ const {
   resolveUserId,
   getOrInitWallet,
   toSnapshot,
-  creditDeposit,
-  debitWithdraw,
   chargeAndStartSession,
   canAffordGameplayEntry,
   emitWalletSnapshot,
 } = require('./socket/walletManager');
 const {
   getWalletPageData,
-  recordTransaction,
   getOrInitProfile,
-  generateReference,
 } = require('./services/walletTransactionService');
 const {
   getProfileData,
@@ -278,66 +274,6 @@ function registerSocketHandlers(io) {
         if (typeof ack === 'function') {
           ack({ ok: false, error: err?.message ?? 'profile sound failed' });
         }
-      }
-    });
-
-    socket.on('wallet:deposit', async (payload = {}, ack) => {
-      const id = resolveUserId(socket, payload);
-      socket.data.userId = id;
-      const amount = Number(payload.amount ?? payload.value);
-
-      const result = creditDeposit(id, amount);
-      if (!result.ok) {
-        const err = { ok: false, error: result.error };
-        if (typeof ack === 'function') ack(err);
-        socket.emit('wallet:error', err);
-        return;
-      }
-
-      const reference = payload.reference ?? payload.ref ?? generateReference();
-
-      await recordTransaction(id, {
-        type: 'deposit',
-        amount,
-        reference,
-      });
-
-      emitWalletSnapshot(socket, result.wallet);
-      const page = await getWalletPageData(id, payload);
-      socket.emit('wallet:page', page);
-      if (typeof ack === 'function') {
-        ack({ ok: true, ...page, credited: amount, target: 'playWallet' });
-      }
-    });
-
-    socket.on('wallet:withdraw', async (payload = {}, ack) => {
-      const id = resolveUserId(socket, payload);
-      socket.data.userId = id;
-
-      const bannedErr = await rejectIfBannedSocket(id, ack);
-      if (bannedErr) return;
-
-      const amount = Number(payload.amount ?? payload.value);
-
-      const result = debitWithdraw(id, amount);
-      if (!result.ok) {
-        const err = { ok: false, error: result.error };
-        if (typeof ack === 'function') ack(err);
-        socket.emit('wallet:error', err);
-        return;
-      }
-
-      await recordTransaction(id, {
-        type: 'withdraw',
-        amount,
-        channel: payload.channel ?? 'TELE',
-      });
-
-      emitWalletSnapshot(socket, result.wallet);
-      const page = await getWalletPageData(id, payload);
-      socket.emit('wallet:page', page);
-      if (typeof ack === 'function') {
-        ack({ ok: true, ...page, withdrawn: amount });
       }
     });
 

@@ -97,12 +97,11 @@ function resolveUserId(socket, payload = {}) {
   });
   if (resolved?.userId) return resolved.userId;
 
-  const legacy =
-    socket.data?.telegramUserId ??
-    socket.data?.userId ??
-    payload.telegramId ??
-    payload.userId;
-  if (isValidTelegramId(legacy)) return String(legacy).trim();
+  const fromVerifiedSession =
+    socket.data?.telegramUserId ?? socket.data?.userId;
+  if (isValidTelegramId(fromVerifiedSession)) {
+    return String(fromVerifiedSession).trim();
+  }
 
   return String(socket.id);
 }
