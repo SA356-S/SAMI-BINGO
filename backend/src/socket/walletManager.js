@@ -34,6 +34,9 @@ const walletsByUser = new Map();
 /** @type {Map<string, Promise<{ main: number, play: number }>>} */
 const loadPromises = new Map();
 
+/** @type {Map<string, Promise<unknown>>} */
+const persistChains = new Map();
+
 const INITIAL_PLAY_WALLET = 0;
 const INITIAL_MAIN_WALLET = 0;
 
@@ -83,9 +86,20 @@ function persistWalletAsync(userId, extras = {}) {
   const key = String(userId);
   const wallet = walletsByUser.get(key);
   if (!wallet || !isDbReady()) return Promise.resolve(null);
-  return saveWalletToDb(key, wallet, extras).catch((err) => {
-    logPersistError(key, err);
-    return null;
+
+  const run = () =>
+    saveWalletToDb(key, walletsByUser.get(key), extras).catch((err) => {
+      logPersistError(key, err);
+      return null;
+    });
+
+  const previous = persistChains.get(key) ?? Promise.resolve();
+  const next = previous.then(() => run());
+  persistChains.set(key, next);
+  return next.finally(() => {
+    if (persistChains.get(key) === next) {
+      persistChains.delete(key);
+    }
   });
 }
 

@@ -3,6 +3,12 @@ const { generateBingoCard } = require('../utils/bingoCard');
 const bingoBall = require('../utils/bingoBall');
 const { formatBallCall, getBingoLetter } = bingoBall;
 const {
+  emitRoomIfChanged,
+  clearRoomBroadcastCache,
+} = require('./roomBroadcast');
+
+const DEBUG_BINGO_DRAW = process.env.DEBUG_BINGO_DRAW === 'true';
+const {
   BALL_INTERVAL_MS,
   GAME_ENTRY_STAKE,
   HOUSE_COMMISSION_RATE,
@@ -70,6 +76,41 @@ class GameSession {
     this._lobbyExpiredLatch = false;
     /** WAITING | COUNTDOWN_RUNNING | GAME_STARTED */
     this.lobbyPhase = LOBBY_PHASE.COUNTDOWN_RUNNING;
+    /** Fingerprints for deduplicated room-wide Socket.IO emits */
+    this._roomBroadcastCache = Object.create(null);
+    /** O(1) userId -> seated/away player record */
+    this._playersByUserId = new Map();
+    this._playersListCache = null;
+    this._seatedPlayersCache = null;
+    this._seatedCountCache = null;
+    this._totalCartelsCache = null;
+    this._takenCartelsArrayCache = null;
+  }
+
+  /** Invalidate derived player/lobby caches after cartel or roster mutations. */
+  _bumpRoomState() {
+    this._playersListCache = null;
+    this._seatedPlayersCache = null;
+    this._seatedCountCache = null;
+    this._totalCartelsCache = null;
+    this._takenCartelsArrayCache = null;
+    clearRoomBroadcastCache(this._roomBroadcastCache);
+  }
+
+  _indexPlayer(player) {
+    if (player?.userId) {
+      this._playersByUserId.set(String(player.userId), player);
+    }
+  }
+
+  _unindexPlayer(userId) {
+    if (userId) this._playersByUserId.delete(String(userId));
+  }
+
+  getTakenCartelsArray() {
+    if (this._takenCartelsArrayCache) return this._takenCartelsArrayCache;
+    this._takenCartelsArrayCache = [...this.takenCartels];
+    return this._takenCartelsArrayCache;
   }
 
   getCartelsForUser(userId) {
@@ -177,7 +218,19 @@ class GameSession {
    * Each client gets their own myCartels/takenByOthers; room payload never leaks another user's selection.
    */
   emitLobbySelectionUpdate(io) {
-    const roomPayload = {
+    const roomPayload = this.buildLobbySelectionPayload();
+    emitRoomIfChanged(
+      io,
+      this.roomName,
+      'game:selection-update',
+      roomPayload,
+      this._roomBroadcastCache,
+      'selectionUpdate'
+    );
+  }
+
+  buildLobbySelectionPayload() {
+    return {
       gameId: this.gameId,
       status: this.status,
       gameStatus: this.getPublicGameStatus(),
@@ -186,13 +239,107 @@ class GameSession {
       countdownSeconds: this.getLobbyCountdownRemaining(),
       countdownEndsAt: this.lobbyCountdownEndsAt,
       serverTime: Date.now(),
-      takenCartels: [...this.takenCartels],
+      takenCartels: this.getTakenCartelsArray(),
       playersCount: this.playersCount,
       selectionLocked: this.isSelectionLocked(),
       gameInProgress: this.status === 'calling',
     };
+  }
 
-    io.to(this.roomName).emit('game:selection-update', roomPayload);
+  buildWaitingLobbyTickPayload() {
+    const sync = {
+      ...this.toLobbySyncPayload(),
+      lobbyPhase: LOBBY_PHASE.COUNTDOWN_RUNNING,
+      phase: LOBBY_PHASE.COUNTDOWN_RUNNING,
+    };
+    return {
+      ...sync,
+      takenCartels: this.getTakenCartelsArray(),
+      selectionLocked: this.isSelectionLocked(),
+      gameInProgress: false,
+    };
+  }
+
+  buildCallingLobbyTickPayload() {
+    return {
+      ...this.toLobbySyncPayload(),
+      gameInProgress: true,
+      selectionLocked: true,
+      status: 'calling',
+    };
+  }
+
+  emitWaitingLobbyTick(io) {
+    emitRoomIfChanged(
+      io,
+      this.roomName,
+      'game:lobby-tick',
+      this.buildWaitingLobbyTickPayload(),
+      this._roomBroadcastCache,
+      'lobbyTickWaiting'
+    );
+  }
+
+  emitCallingLobbyTick(io) {
+    emitRoomIfChanged(
+      io,
+      this.roomName,
+      'game:lobby-tick',
+      this.buildCallingLobbyTickPayload(),
+      this._roomBroadcastCache,
+      'lobbyTickCalling',
+      { ignoreServerTime: true }
+    );
+  }
+
+  /**
+   * Room-wide game:update with optional dedupe for lightweight calling churn.
+   * @param {import('socket.io').Server} io
+   */
+  emitRoomGameUpdate(io, { lightweight = false } = {}) {
+    if (!io) return;
+    const duringCalling = this.status === 'calling';
+    const slim = lightweight && duringCalling;
+    const payload = this.toRoomBroadcastState({
+      includeBallHistory: !slim,
+      includePlayers: !slim,
+      includeOwnership: !slim,
+    });
+
+    if (slim) {
+      emitRoomIfChanged(
+        io,
+        this.roomName,
+        'game:update',
+        payload,
+        this._roomBroadcastCache,
+        'gameUpdateSlim'
+      );
+      return;
+    }
+
+    delete this._roomBroadcastCache.gameUpdateSlim;
+    io.to(this.roomName).emit('game:update', payload);
+  }
+
+  emitRoomPlayersChurn(io) {
+    if (!io) return;
+    const duringCalling = this.status === 'calling';
+    const payload = {
+      gameId: this.gameId,
+      playersCount: this.playersCount,
+    };
+    if (!duringCalling) {
+      payload.players = this.buildPlayersList();
+    }
+    emitRoomIfChanged(
+      io,
+      this.roomName,
+      'game:players',
+      payload,
+      this._roomBroadcastCache,
+      duringCalling ? 'playersSlim' : 'playersFull'
+    );
   }
 
   getLobbyCountdownRemaining() {
@@ -220,7 +367,7 @@ class GameSession {
       countdownSeconds: this.getLobbyCountdownRemaining(),
       countdownEndsAt: this.lobbyCountdownEndsAt,
       serverTime: Date.now(),
-      takenCartels: [...this.takenCartels],
+      takenCartels: this.getTakenCartelsArray(),
       playersCount: this.playersCount,
       selectionLocked: this.isSelectionLocked(),
       gameInProgress: this.status === 'calling',
@@ -234,7 +381,9 @@ class GameSession {
   }
 
   get playersCount() {
-    return this.buildPlayersList().length;
+    if (this._seatedCountCache != null) return this._seatedCountCache;
+    this._seatedCountCache = this.allSeatedPlayers().length;
+    return this._seatedCountCache;
   }
 
   /** "Player 2" when the user selected 2 cartels, etc. */
@@ -246,6 +395,8 @@ class GameSession {
   /** Unique seated players (at least one cartel) */
   /** All seated players (connected + temporarily away). */
   allSeatedPlayers() {
+    if (this._seatedPlayersCache) return this._seatedPlayersCache;
+
     const byUser = new Map();
     for (const p of this.players.values()) {
       if (p.userId) byUser.set(String(p.userId), p);
@@ -254,10 +405,13 @@ class GameSession {
     for (const p of this.awayPlayers.values()) {
       if (p.userId) byUser.set(String(p.userId), p);
     }
-    return [...byUser.values()].filter((p) => p.cartelIds?.length);
+    this._seatedPlayersCache = [...byUser.values()].filter((p) => p.cartelIds?.length);
+    return this._seatedPlayersCache;
   }
 
   buildPlayersList() {
+    if (this._playersListCache) return this._playersListCache;
+
     const list = [];
     let seat = 0;
 
@@ -283,16 +437,25 @@ class GameSession {
       });
     }
 
+    this._playersListCache = list;
     return list;
   }
 
   getPlayerByUserId(userId) {
     if (!userId) return null;
     const id = String(userId);
+    const indexed = this._playersByUserId.get(id);
+    if (indexed) return indexed;
+
     for (const p of this.players.values()) {
-      if (String(p.userId) === id) return p;
+      if (String(p.userId) === id) {
+        this._indexPlayer(p);
+        return p;
+      }
     }
-    return this.awayPlayers.get(id) ?? null;
+    const away = this.awayPlayers.get(id) ?? null;
+    if (away) this._indexPlayer(away);
+    return away;
   }
 
   canUserRejoin(userId) {
@@ -309,18 +472,14 @@ class GameSession {
    */
   buildCartelOwnership(forViewerSocketId = null, forViewerUserId = null) {
     const ownership = {};
-    const playersList = this.buildPlayersList();
-    const seatByUser = new Map(
-      playersList.map((p) => [String(p.userId ?? p.socketId), p])
-    );
+    let seat = 0;
 
     for (const p of this.allSeatedPlayers()) {
       if (!p.cartelIds?.length) continue;
 
+      seat += 1;
       const socketId = String(p.socketId);
       const ownerKey = String(p.userId ?? p.socketId);
-      const seatInfo = seatByUser.get(ownerKey);
-      const seat = seatInfo?.seatNumber ?? 0;
       const cartelCount = p.cartelIds.length;
       const playerLabel = GameSession.playerLabelFromCartelCount(cartelCount);
       const isMine =
@@ -356,10 +515,12 @@ class GameSession {
 
   /** Total cartels reserved by all players in this session */
   get totalCartels() {
-    return this.allSeatedPlayers().reduce(
+    if (this._totalCartelsCache != null) return this._totalCartelsCache;
+    this._totalCartelsCache = this.allSeatedPlayers().reduce(
       (sum, player) => sum + player.cartelIds.length,
       0
     );
+    return this._totalCartelsCache;
   }
 
   /** Preview pool before start, or settled prize after 20% house cut */
@@ -468,6 +629,7 @@ class GameSession {
         }
       }
 
+      this._bumpRoomState();
       return { ok: true, cards: [], released };
     }
 
@@ -510,6 +672,9 @@ class GameSession {
       this.awayPlayers.delete(String(resolvedUserId));
     }
 
+    const playerRecord = this.players.get(socketId);
+    this._indexPlayer(playerRecord);
+    this._bumpRoomState();
     return { ok: true, cards };
   }
 
@@ -544,6 +709,7 @@ class GameSession {
 
     if (userId) {
       this.awayPlayers.set(userId, player);
+      this._indexPlayer(player);
     }
 
     this.players.delete(socketId);
@@ -576,6 +742,7 @@ class GameSession {
       this.cartelOwners.set(id, ownerKey);
     }
 
+    this._indexPlayer(player);
     return player;
   }
 
@@ -585,6 +752,7 @@ class GameSession {
 
     if (player.userId) {
       this.awayPlayers.delete(String(player.userId));
+      this._unindexPlayer(player.userId);
     }
 
     for (const id of player.cartelIds) {
@@ -592,6 +760,9 @@ class GameSession {
       this.cartelOwners.delete(id);
     }
     this.players.delete(socketId);
+    if (player.cartelIds?.length) {
+      this._bumpRoomState();
+    }
   }
 
   canStartCalling() {
@@ -637,13 +808,15 @@ class GameSession {
       sequence: this.ballSequence,
       calledCount: this.calledNumbers.length,
     });
-    console.info('[bingo-draw] number sent to clients', {
-      gameId: this.gameId,
-      event: 'newNumber',
-      number: payload.number,
-      latestBall: payload.latestBall,
-      ballSync: payload.ballSync,
-    });
+    if (DEBUG_BINGO_DRAW) {
+      console.info('[bingo-draw] number sent to clients', {
+        gameId: this.gameId,
+        event: 'newNumber',
+        number: payload.number,
+        latestBall: payload.latestBall,
+        ballSync: payload.ballSync,
+      });
+    }
 
     io.to(this.roomName).emit('newNumber', payload);
     this.emitRoomAudio(io, 'ball_called', {
@@ -770,6 +943,7 @@ class GameSession {
       gameManager.stopOrphanBallCallers(this.gameId);
       this.status = 'calling';
       this.lobbyPhase = LOBBY_PHASE.GAME_STARTED;
+      this._bumpRoomState();
       this._drawLoopToken += 1;
       const loopToken = this._drawLoopToken;
       this.emitRoomAudio(io, 'game_start_sound', { status: 'calling' });
@@ -874,6 +1048,7 @@ class GameSession {
 
     this.clearResetTimer();
     this.status = 'ended';
+    this._bumpRoomState();
     this.winner = null;
 
     this.resetTimer = setTimeout(() => {
@@ -1059,6 +1234,7 @@ class GameSession {
     this.stopCalling();
     this.clearResetTimer();
     this.status = 'ended';
+    this._bumpRoomState();
 
     const {
       distributeHumanPrizesAtWinMoment,
@@ -1164,6 +1340,11 @@ class GameSession {
     this.awayPlayers.clear();
     this.takenCartels.clear();
     this.cartelOwners.clear();
+    this._playersByUserId.clear();
+    for (const player of this.players.values()) {
+      this._indexPlayer(player);
+    }
+    this._bumpRoomState();
   }
 
   /** Full lobby reset payload — empty balls/cartels, waiting for next round */
@@ -1285,7 +1466,7 @@ class GameSession {
       latestBall: this.latestBall,
       calledCount: this.calledNumbers.length,
       sequence: this.ballSequence,
-      takenCartels: [...this.takenCartels],
+      takenCartels: this.getTakenCartelsArray(),
       status: this.status,
     };
 
@@ -1307,13 +1488,13 @@ class GameSession {
   }
 
   /** Per-socket view — includes only that connection's cartels/cards. */
-  toPublicState(forSocketId = null, forUserId = null) {
+  toPublicState(forSocketId = null, forUserId = null, options = {}) {
     let player = forSocketId ? this.players.get(forSocketId) : null;
     if (!player && forUserId) {
       player = this.getPlayerByUserId(forUserId);
     }
     const viewerUserId = forUserId ?? player?.userId ?? null;
-    const playersList = this.buildPlayersList();
+    const playersList = options.playersList ?? this.buildPlayersList();
     const cartelOwnership = this.buildCartelOwnership(
       forSocketId,
       viewerUserId
@@ -1343,7 +1524,7 @@ class GameSession {
       called: [...this.calledNumbers],
       balls: [...this.calledNumbers],
       latestBall: this.latestBall,
-      takenCartels: [...this.takenCartels],
+      takenCartels: this.getTakenCartelsArray(),
       status: this.status,
       myCartels: player?.cartelIds ?? [],
       myCards: player?.cards ?? [],
@@ -1361,13 +1542,22 @@ class GameSession {
 
   /** Emit an event with per-socket payloads so each client gets its own cartels. */
   emitPerPlayer(io, eventName, extra = {}) {
+    const playersList = this.buildPlayersList();
+    const calledNumbers = this.calledNumbers;
+    const takenCartels = this.getTakenCartelsArray();
+
     for (const [socketId] of this.players) {
       const sock = io.sockets.sockets.get(socketId);
       if (sock) {
+        const state = this.toPublicState(socketId, null, { playersList });
+        state.calledNumbers = [...calledNumbers];
+        state.called = state.calledNumbers;
+        state.balls = state.calledNumbers;
+        state.takenCartels = takenCartels;
         sock.emit(eventName, {
           ok: true,
           gameId: this.gameId,
-          ...this.toPublicState(socketId),
+          ...state,
           ...extra,
         });
       }
@@ -1387,7 +1577,7 @@ class GameSession {
       wallets: { main, play, total: main + play },
       playersCount: this.playersCount,
       players: this.playersCount,
-      takenCartels: [...this.takenCartels],
+      takenCartels: this.getTakenCartelsArray(),
       takenByOthers: userId ? this.getTakenByOthers(userId) : [...this.takenCartels],
       taken: [...this.takenCartels],
       occupied: [...this.takenCartels],
@@ -1540,7 +1730,7 @@ class GameSession {
     const roomStart = {
       ...baseStart,
       ...this.toLobbySyncPayload(),
-      takenCartels: [...this.takenCartels],
+      takenCartels: this.getTakenCartelsArray(),
       playersCount: this.playersCount,
     };
     io.to(this.roomName).emit('game:started', roomStart);
@@ -1582,19 +1772,7 @@ class GameManager {
         session.ensureLobbyCountdownRunning();
 
         const remaining = session.getLobbyCountdownRemaining();
-        const sync = {
-          ...session.toLobbySyncPayload(),
-          lobbyPhase: LOBBY_PHASE.COUNTDOWN_RUNNING,
-          phase: LOBBY_PHASE.COUNTDOWN_RUNNING,
-        };
-
-        io.to(session.roomName).emit('game:lobby-tick', {
-          ...sync,
-          takenCartels: [...session.takenCartels],
-          selectionLocked: session.isSelectionLocked(),
-          gameInProgress: false,
-        });
-        session.emitLobbySelectionUpdate(io);
+        session.emitWaitingLobbyTick(io);
 
         if (remaining > 0 && remaining <= 5) {
           session.emitRoomAudio(io, 'countdown_tick', { seconds: remaining });
@@ -1610,12 +1788,7 @@ class GameManager {
 
       if (session.status === 'calling') {
         session.ensureBallCaller(io);
-        io.to(session.roomName).emit('game:lobby-tick', {
-          ...session.toLobbySyncPayload(),
-          gameInProgress: true,
-          selectionLocked: true,
-          status: 'calling',
-        });
+        session.emitCallingLobbyTick(io);
       }
     };
 

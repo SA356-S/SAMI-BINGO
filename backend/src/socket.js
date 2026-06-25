@@ -120,29 +120,12 @@ function registerSocketHandlers(io) {
   io.on('connection', (socket) => {
     const emitRoomGameUpdate = (session, { lightweight = false } = {}) => {
       if (!session) return;
-      const duringCalling = session.status === 'calling';
-      const slim = lightweight && duringCalling;
-      io.to(session.roomName).emit(
-        'game:update',
-        session.toRoomBroadcastState({
-          includeBallHistory: !slim,
-          includePlayers: !slim,
-          includeOwnership: !slim,
-        })
-      );
+      session.emitRoomGameUpdate(io, { lightweight });
     };
 
     const emitRoomPlayersChurn = (session) => {
       if (!session) return;
-      const duringCalling = session.status === 'calling';
-      const payload = {
-        gameId: session.gameId,
-        playersCount: session.playersCount,
-      };
-      if (!duringCalling) {
-        payload.players = session.buildPlayersList();
-      }
-      io.to(session.roomName).emit('game:players', payload);
+      session.emitRoomPlayersChurn(io);
     };
 
     socket.on('admin:subscribe', async (payload = {}, ack) => {
