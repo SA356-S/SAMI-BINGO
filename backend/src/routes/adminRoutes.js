@@ -4,7 +4,8 @@ const {
   attachPanelAdmin,
   requireManager,
   requireAdminOrManager,
-  ADMIN_TOKEN,
+  getAdminToken,
+  getAdminPassword,
 } = require('../middleware/adminAuth');
 const userRoleService = require('../services/userRoleService');
 const {
@@ -31,15 +32,24 @@ const robotStatsService = require('../services/robotStatsService');
 
 const router = express.Router();
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
-
 router.post('/login', async (req, res) => {
+  const adminPassword = getAdminPassword();
+  const adminToken = getAdminToken();
+
+  if (!adminPassword || !adminToken) {
+    return res.status(503).json({
+      ok: false,
+      error: 'admin_not_configured',
+      message: 'ADMIN_PASSWORD and ADMIN_TOKEN environment variables are required.',
+    });
+  }
+
   const password = String(req.body?.password || '');
   const telegramId = userRoleService.parseTelegramId(
     req.body?.telegramId ?? req.body?.telegram_id
   );
 
-  if (password !== ADMIN_PASSWORD) {
+  if (password !== adminPassword) {
     return res.status(401).json({
       ok: false,
       error: 'invalid_credentials',
@@ -70,7 +80,7 @@ router.post('/login', async (req, res) => {
 
     res.json({
       ok: true,
-      token: ADMIN_TOKEN,
+      token: adminToken,
       role: login.role,
       telegramId: login.telegramId,
       user: login.user,

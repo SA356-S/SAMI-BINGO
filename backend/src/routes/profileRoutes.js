@@ -44,14 +44,11 @@ router.get('/', requireTelegramUserId, async (req, res) => {
 });
 
 /**
- * PATCH /api/profile/settings  { userId, soundEffectsEnabled }
+ * PATCH /api/profile/settings  { soundEffectsEnabled }
  */
-router.patch('/settings', async (req, res) => {
+router.patch('/settings', requireTelegramUserId, async (req, res) => {
   try {
-    const userId = req.body?.userId ?? req.headers['x-user-id'];
-    if (!userId) {
-      return res.status(400).json({ ok: false, error: 'userId is required' });
-    }
+    const userId = req.telegramUserId;
 
     if ('soundEffectsEnabled' in req.body) {
       const enabled = await setSoundEffects(

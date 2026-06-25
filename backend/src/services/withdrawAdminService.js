@@ -173,7 +173,11 @@ function resolveInternalApiBase() {
 
 async function requestAdminPanelBroadcast() {
   const base = resolveInternalApiBase();
-  const token = process.env.ADMIN_TOKEN || 'edil-bingo-admin-dev-token';
+  const token = String(process.env.ADMIN_TOKEN || '').trim();
+  if (!token) {
+    console.warn('[withdraw] admin HTTP broadcast skipped — ADMIN_TOKEN is not set');
+    return false;
+  }
   const url = `${base}/api/admin/internal/broadcast-withdraw-requests`;
 
   try {

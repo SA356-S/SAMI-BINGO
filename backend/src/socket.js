@@ -298,8 +298,15 @@ function registerSocketHandlers(io) {
       socket.data.gameId = session.gameId;
       socket.data.playerName = playerName || 'Player';
 
-      const joinUserId = resolveUserId(socket, payload);
+      const joinUserId = resolveGameplayUserId(socket, payload);
+      if (!joinUserId) {
+        const err = { ok: false, error: 'telegram_auth_required' };
+        if (typeof ack === 'function') ack(err);
+        socket.emit('game:error', err);
+        return;
+      }
       socket.data.userId = joinUserId;
+      socket.data.telegramUserId = joinUserId;
 
       const bannedErr = await rejectIfBannedSocket(joinUserId, ack);
       if (bannedErr) return;

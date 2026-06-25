@@ -1,8 +1,13 @@
 const { ROLES, normalizeRole, isPanelRole, isManagerRole } = require('../constants/roles');
 const userRoleService = require('../services/userRoleService');
 
-const ADMIN_TOKEN =
-  process.env.ADMIN_TOKEN || 'edil-bingo-admin-dev-token';
+function getAdminToken() {
+  return String(process.env.ADMIN_TOKEN || '').trim();
+}
+
+function getAdminPassword() {
+  return String(process.env.ADMIN_PASSWORD || '').trim();
+}
 
 function extractAdminToken(req) {
   const auth = req.headers.authorization;
@@ -23,8 +28,17 @@ function extractPanelTelegramId(req) {
 }
 
 function requireAdmin(req, res, next) {
+  const expected = getAdminToken();
+  if (!expected) {
+    return res.status(503).json({
+      ok: false,
+      error: 'admin_not_configured',
+      message: 'ADMIN_TOKEN environment variable is required.',
+    });
+  }
+
   const token = extractAdminToken(req);
-  if (!token || token !== ADMIN_TOKEN) {
+  if (!token || token !== expected) {
     return res.status(401).json({
       ok: false,
       error: 'admin_unauthorized',
@@ -35,7 +49,8 @@ function requireAdmin(req, res, next) {
 }
 
 function verifyAdminToken(token) {
-  return Boolean(token && token === ADMIN_TOKEN);
+  const expected = getAdminToken();
+  return Boolean(expected && token && token === expected);
 }
 
 /**
@@ -107,7 +122,8 @@ function requireManagerOnly(req, res, next) {
 }
 
 module.exports = {
-  ADMIN_TOKEN,
+  getAdminToken,
+  getAdminPassword,
   ROLES,
   requireAdmin,
   verifyAdminToken,

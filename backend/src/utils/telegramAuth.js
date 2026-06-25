@@ -55,6 +55,14 @@ function collectInitDataString(sources = {}) {
  * Validate Telegram WebApp initData HMAC.
  * @returns {{ ok: true, user: object|null, authDate: number|null } | { ok: false, error: string }}
  */
+function getInitDataMaxAgeSec() {
+  const configured = Number(process.env.TELEGRAM_INIT_DATA_MAX_AGE_SEC);
+  if (Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+  return 86400;
+}
+
 function validateInitData(initData, botToken = getBotToken()) {
   const raw = String(initData || '').trim();
   if (!raw) {
@@ -92,12 +100,28 @@ function validateInitData(initData, botToken = getBotToken()) {
     }
 
     const authDate = Number(params.get('auth_date'));
+    if (!Number.isFinite(authDate) || authDate <= 0) {
+      return { ok: false, error: 'missing_auth_date' };
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const ageSec = nowSec - authDate;
+    const maxAgeSec = getInitDataMaxAgeSec();
+
+    if (ageSec > maxAgeSec) {
+      return { ok: false, error: 'init_data_expired' };
+    }
+
+    if (ageSec < -300) {
+      return { ok: false, error: 'init_data_from_future' };
+    }
+
     const user = parseInitDataUser(raw);
 
     return {
       ok: true,
       user,
-      authDate: Number.isFinite(authDate) ? authDate : null,
+      authDate,
     };
   } catch {
     return { ok: false, error: 'parse_failed' };
