@@ -51,6 +51,8 @@ let lobbyBoundSocket = null;
 let localTickTimer = null;
 let selectionSyncInFlight = false;
 let selectionSyncGeneration = 0;
+/** Cartelas removed locally — ignore server taken until select ack confirms release */
+const pendingReleaseCartels = new Set();
 let gameStartNavigateDone = false;
 let lastNotifyFingerprint = '';
 let lastLocalCountdownRemaining = null;
@@ -193,17 +195,23 @@ function mergeServerCartels(serverCartels) {
 
   const next = serverCartels.map(Number).filter((n) => n >= 1);
 
-  if (next.length > 0) {
-    state.selectedCartels = next;
+  if (next.length === 0) {
+    state.selectedCartels = [];
+    pendingReleaseCartels.clear();
     return;
   }
 
-  if (selectionSyncInFlight && state.selectedCartels.length > 0) {
-    return;
+  if (selectionSyncInFlight) {
+    const expected = [...state.selectedCartels].sort((a, b) => a - b).join(',');
+    const incoming = [...next].sort((a, b) => a - b).join(',');
+    if (incoming !== expected) {
+      return;
+    }
   }
 
-  if (state.selectedCartels.length === 0) {
-    state.selectedCartels = next;
+  state.selectedCartels = next;
+  for (const id of next) {
+    pendingReleaseCartels.delete(id);
   }
 }
 
@@ -244,7 +252,12 @@ export function applyLobbyPayload(
     } else if (Array.isArray(taken)) {
       const mine = new Set(state.selectedCartels);
       state.takenCartels = new Set(
-        taken.map(Number).filter((n) => n >= 1 && !mine.has(n))
+        taken
+          .map(Number)
+          .filter(
+            (n) =>
+              n >= 1 && !mine.has(n) && !pendingReleaseCartels.has(n)
+          )
       );
     } else if (replace) {
       state.takenCartels = new Set();
@@ -323,6 +336,9 @@ function syncSelectionToServer() {
         state.selectedCartels = Array.isArray(restored)
           ? restored.map(Number).filter((n) => n >= 1)
           : [];
+        for (const id of state.selectedCartels) {
+          pendingReleaseCartels.delete(id);
+        }
       }
       if (ack?.selectionLocked || ack?.error === 'game_in_progress') {
         state.selectionLocked = true;
@@ -334,6 +350,13 @@ function syncSelectionToServer() {
     }
 
     applyLobbyPayload(ack, { mergeCartels: true, mergeTaken: true });
+
+    const confirmed = new Set(state.selectedCartels);
+    for (const id of [...pendingReleaseCartels]) {
+      if (!confirmed.has(id)) {
+        pendingReleaseCartels.delete(id);
+      }
+    }
   };
 
   const timer = setTimeout(() => {
@@ -377,7 +400,12 @@ export function updateSelectedCartels(cartels) {
   for (const id of prev) {
     if (!nextSet.has(id)) {
       state.takenCartels.delete(id);
+      pendingReleaseCartels.add(id);
     }
+  }
+
+  for (const id of next) {
+    pendingReleaseCartels.delete(id);
   }
 
   state.selectedCartels = next;
@@ -580,6 +608,7 @@ export function resetLobbySessionState() {
   state.lobbyPhase = 'COUNTDOWN_RUNNING';
   state.countdownExpiredSignaled = false;
   gameStartNavigateDone = false;
+  pendingReleaseCartels.clear();
   lastNotifyFingerprint = '';
   lastLocalCountdownRemaining = null;
   notify(true);
