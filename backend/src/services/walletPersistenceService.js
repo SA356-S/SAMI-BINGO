@@ -186,8 +186,14 @@ async function debitMainWalletDb(userId, amount) {
 
 /**
  * Load every persisted wallet into the in-memory cache on server startup.
+ * Set HYDRATE_ALL_WALLETS=true to restore previous eager hydration behavior.
  */
 async function hydrateAllWalletsFromDb(setCacheEntry) {
+  if (process.env.HYDRATE_ALL_WALLETS !== 'true') {
+    console.log('[wallet] lazy hydration enabled — wallets load on first access');
+    return 0;
+  }
+
   if (!isDbReady()) {
     console.warn('[wallet] DB not ready — skipping wallet hydration');
     return 0;

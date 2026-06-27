@@ -127,37 +127,83 @@ function CartelBoardPanel({ selectionCount, selectedCartels, isDual }) {
   );
 }
 
+function selectionFieldsEqual(prev, snap) {
+  if (!prev || !snap) return false;
+  if (prev.selectionLocked !== snap.selectionLocked) return false;
+  if (prev.gameInProgress !== snap.gameInProgress) return false;
+  if (prev.gameId !== snap.gameId) return false;
+  if (prev.selectedCartels.length !== snap.selectedCartels.length) return false;
+  if (!prev.selectedCartels.every((n, i) => n === snap.selectedCartels[i])) {
+    return false;
+  }
+  if (prev.takenCartels.size !== snap.takenCartels.size) return false;
+  for (const n of prev.takenCartels) {
+    if (!snap.takenCartels.has(n)) return false;
+  }
+  return true;
+}
+
+const CartelGridRow = memo(function CartelGridRow({
+  nums,
+  selectedSet,
+  takenSet,
+  onToggle,
+}) {
+  return (
+    <div className="contents">
+      {nums.map((num) => {
+        const status = selectedSet.has(num)
+          ? 'mine'
+          : takenSet.has(num)
+            ? 'taken'
+            : 'available';
+        return (
+          <CartelButton
+            key={num}
+            num={num}
+            status={status}
+            onToggle={onToggle}
+          />
+        );
+      })}
+    </div>
+  );
+});
+
 export default function CardSelection() {
   const navigate = useNavigate();
-  const [lobby, setLobby] = useState(() => getLobbyState());
+  const initial = getLobbyState();
+  const [lobbySelection, setLobbySelection] = useState(() => ({
+    selectedCartels: initial.selectedCartels,
+    takenCartels: initial.takenCartels,
+    selectionLocked: initial.selectionLocked,
+    gameInProgress: initial.gameInProgress,
+    gameId: initial.gameId,
+  }));
+  const [timer, setTimer] = useState(initial.countdownSeconds ?? 0);
   const [topBanner, setTopBanner] = useState(null);
   const [mainWallet, setMainWallet] = useState(0);
   const [playWallet, setPlayWallet] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const selectedCartels = lobby.selectedCartels;
-  const otherTakenCartels = lobby.takenCartels;
-  const selectionLocked = lobby.selectionLocked || lobby.gameInProgress;
-  const gameId = lobby.gameId;
-  const timer = lobby.countdownSeconds ?? 0;
+  const selectedCartels = lobbySelection.selectedCartels;
+  const otherTakenCartels = lobbySelection.takenCartels;
+  const selectionLocked =
+    lobbySelection.selectionLocked || lobbySelection.gameInProgress;
+  const gameId = lobbySelection.gameId;
 
-  const getCartelStatus = useCallback(
-    (num) => {
-      if (selectedCartels.includes(num)) return 'mine';
-      if (otherTakenCartels.has(num)) return 'taken';
-      return 'available';
-    },
-    [selectedCartels, otherTakenCartels]
+  const selectedSet = useMemo(
+    () => new Set(selectedCartels),
+    [selectedCartels]
   );
 
-  const cartelStatusByNum = useMemo(() => {
-    const map = new Map();
-    for (let i = 0; i < ALL_CARTELS.length; i += 1) {
-      const num = ALL_CARTELS[i];
-      map.set(num, getCartelStatus(num));
+  const cartelRows = useMemo(() => {
+    const rows = [];
+    for (let i = 0; i < ALL_CARTELS.length; i += 8) {
+      rows.push(ALL_CARTELS.slice(i, i + 8));
     }
-    return map;
-  }, [getCartelStatus]);
+    return rows;
+  }, []);
 
   const selectionCount = selectedCartels.length;
   const isDual = selectionCount === 2;
@@ -170,7 +216,19 @@ export default function CardSelection() {
   );
 
   useEffect(() => {
-    return subscribeLobby(setLobby);
+    return subscribeLobby((snap) => {
+      setTimer(snap.countdownSeconds ?? 0);
+      setLobbySelection((prev) => {
+        if (selectionFieldsEqual(prev, snap)) return prev;
+        return {
+          selectedCartels: snap.selectedCartels,
+          takenCartels: snap.takenCartels,
+          selectionLocked: snap.selectionLocked,
+          gameInProgress: snap.gameInProgress,
+          gameId: snap.gameId,
+        };
+      });
+    });
   }, []);
 
   const toggleCartel = useCallback(
@@ -314,11 +372,12 @@ export default function CardSelection() {
       <section className="min-h-0 flex-1 overflow-hidden px-2 sm:px-3">
         <div className="cartel-scroll h-full overflow-y-auto overscroll-contain rounded-xl border border-white/[0.08] bg-[#0d1220]/50 p-1.5 sm:p-2">
           <div className="grid grid-cols-8 gap-1.5 sm:gap-2">
-            {ALL_CARTELS.map((num) => (
-              <CartelButton
-                key={num}
-                num={num}
-                status={cartelStatusByNum.get(num) ?? 'available'}
+            {cartelRows.map((nums, rowIndex) => (
+              <CartelGridRow
+                key={rowIndex}
+                nums={nums}
+                selectedSet={selectedSet}
+                takenSet={otherTakenCartels}
                 onToggle={toggleCartel}
               />
             ))}

@@ -242,8 +242,22 @@ function extractTakenSource(payload = {}) {
   return [];
 }
 
+function payloadHasTakenFields(payload = {}) {
+  return (
+    payload.takenByOthers != null ||
+    payload.takenByOther != null ||
+    payload.takenCartels != null ||
+    payload.taken != null ||
+    payload.occupied != null
+  );
+}
+
 /** Derive takenCartels from server payload + current local selection authority. */
 function applyTakenFromServer(payload = {}) {
+  if (!payloadHasTakenFields(payload)) {
+    return;
+  }
+
   const mine = new Set(state.selectedCartels);
   const incoming = extractTakenSource(payload)
     .map(Number)

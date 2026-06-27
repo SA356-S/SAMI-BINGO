@@ -285,22 +285,47 @@ class GameSession {
     return { ...this._getRoomLobbyCore() };
   }
 
-  buildWaitingLobbyTickPayload() {
+  /** Lightweight lobby tick — omits takenCartels array (large at scale). */
+  buildSlimLobbyTickPayload(phase = 'waiting') {
+    const core = this._getRoomLobbyCore();
+    const base = {
+      gameId: core.gameId,
+      status: core.status,
+      gameStatus: core.gameStatus,
+      lobbyPhase: core.lobbyPhase,
+      phase: core.phase,
+      countdownSeconds: core.countdownSeconds,
+      countdownEndsAt: core.countdownEndsAt,
+      serverTime: core.serverTime,
+      playersCount: core.playersCount,
+      selectionLocked: core.selectionLocked,
+      lobbyRevision: core.lobbyRevision,
+      selectionVersion: core.selectionVersion,
+    };
+    if (phase === 'calling') {
+      return {
+        ...base,
+        gameInProgress: true,
+        selectionLocked: true,
+        status: 'calling',
+        lobbyPhase: core.lobbyPhase,
+        phase: core.lobbyPhase,
+      };
+    }
     return {
-      ...this._getRoomLobbyCore(),
+      ...base,
       lobbyPhase: LOBBY_PHASE.COUNTDOWN_RUNNING,
       phase: LOBBY_PHASE.COUNTDOWN_RUNNING,
       gameInProgress: false,
     };
   }
 
+  buildWaitingLobbyTickPayload() {
+    return this.buildSlimLobbyTickPayload('waiting');
+  }
+
   buildCallingLobbyTickPayload() {
-    return {
-      ...this._getRoomLobbyCore(),
-      gameInProgress: true,
-      selectionLocked: true,
-      status: 'calling',
-    };
+    return this.buildSlimLobbyTickPayload('calling');
   }
 
   emitWaitingLobbyTick(io) {
@@ -1814,6 +1839,32 @@ class GameManager {
     this.lobbySession = this.createSession();
     this.lobbySession.ensureLobbyCountdownRunning();
     this._lobbyClock = null;
+    this._lastSessionPruneAt = 0;
+  }
+
+  stopLobbyCountdownClock() {
+    if (this._lobbyClock) {
+      clearInterval(this._lobbyClock);
+      this._lobbyClock = null;
+    }
+  }
+
+  /** Remove empty non-lobby sessions that are no longer needed. */
+  pruneOrphanSessions() {
+    const lobbyId = this.lobbySession?.gameId;
+    if (!lobbyId) return 0;
+
+    let removed = 0;
+    for (const [id, session] of this.sessions.entries()) {
+      if (String(id) === String(lobbyId)) continue;
+      if (session.status !== 'waiting') continue;
+      if (session.playersCount > 0) continue;
+      if ((session.takenCartels?.size ?? 0) > 0) continue;
+      if (session.drawTimer || session.resetTimer) continue;
+      this.removeSession(id);
+      removed += 1;
+    }
+    return removed;
   }
 
   /**
@@ -1825,6 +1876,15 @@ class GameManager {
     const tick = () => {
       const session = this.lobbySession;
       if (!session) return;
+
+      const now = Date.now();
+      if (now - this._lastSessionPruneAt >= 60_000) {
+        this._lastSessionPruneAt = now;
+        const pruned = this.pruneOrphanSessions();
+        if (pruned > 0) {
+          console.log(`[game] pruned ${pruned} orphan session(s)`);
+        }
+      }
 
       if (session.status === 'waiting') {
         session.ensureLobbyCountdownRunning();

@@ -295,6 +295,12 @@ function flushWalletPersists(userIds) {
   }
 }
 
+/** Persist every wallet currently in the L1 cache (shutdown / maintenance). */
+function flushAllWalletPersists() {
+  const ids = [...walletsByUser.keys()];
+  return Promise.all(ids.map((id) => persistWalletAsync(id)));
+}
+
 /**
  * Deduct from Play Wallet first, then fall back to Main Wallet.
  * Main Wallet should behave like Play Wallet for gameplay charges.
@@ -640,6 +646,7 @@ module.exports = {
   hydrateWalletCacheFromDb,
   persistWalletAsync,
   flushWalletPersists,
+  flushAllWalletPersists,
   GAME_ENTRY_STAKE,
   HOUSE_COMMISSION_RATE,
 };

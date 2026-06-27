@@ -159,9 +159,26 @@ async function start() {
     void startTelegramBots();
   });
 
-  const shutdown = () => {
+  const shutdown = async () => {
+    console.log('[server] shutting down…');
     shutdownMonorepoServices();
+    gameManager.stopLobbyCountdownClock();
+    try {
+      const { flushAllWalletPersists } = require('./socket/walletManager');
+      await flushAllWalletPersists();
+    } catch (err) {
+      console.warn('[server] wallet flush on shutdown failed', err?.message);
+    }
+    try {
+      const { mongoose } = require('./config/db');
+      if (mongoose.connection.readyState === 1) {
+        await mongoose.connection.close();
+      }
+    } catch (err) {
+      console.warn('[server] Mongo close on shutdown failed', err?.message);
+    }
     server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 15_000).unref();
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);

@@ -20,6 +20,11 @@ const PERMANENT_REJECTION_REASONS = new Set([
 ]);
 
 const globallyProcessedTelebirrTxIds = new Set();
+const telebirrTxEvictionQueue = [];
+const MAX_TELEBIRR_TX_CACHE = Math.max(
+  5000,
+  Number(process.env.TELEBIRR_TX_CACHE_MAX) || 50000
+);
 let telebirrMemoryCacheWarmed = false;
 let legacyMongoConnection = null;
 let legacyMongoUnavailable = false;
@@ -169,7 +174,13 @@ function collectGlobalTelebirrDedupKeys(parsed, verified, raw) {
 function markGloballyProcessedTelebirrTx(txKeys) {
   for (const key of txKeys || []) {
     const normalized = normalizeTxId(key);
-    if (normalized) globallyProcessedTelebirrTxIds.add(normalized);
+    if (!normalized || globallyProcessedTelebirrTxIds.has(normalized)) continue;
+    globallyProcessedTelebirrTxIds.add(normalized);
+    telebirrTxEvictionQueue.push(normalized);
+    while (telebirrTxEvictionQueue.length > MAX_TELEBIRR_TX_CACHE) {
+      const evicted = telebirrTxEvictionQueue.shift();
+      if (evicted) globallyProcessedTelebirrTxIds.delete(evicted);
+    }
   }
 }
 

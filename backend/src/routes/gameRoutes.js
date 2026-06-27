@@ -7,6 +7,7 @@ const {
   requireTelegramUserId,
 } = require('../utils/telegramAuth');
 const { rejectIfBanned } = require('../utils/banGate');
+const { requireAdmin } = require('../middleware/adminAuth');
 
 const router = express.Router();
 
@@ -34,7 +35,7 @@ router.get('/card-selection', requireTelegramUserId, async (req, res) => {
  * GET /api/game/main?gameId=
  * Shape matches frontend api/mainGame.js fetchMainGameData()
  */
-router.get('/main', (req, res) => {
+router.get('/main', requireTelegramUserId, (req, res) => {
   const gameId = req.query.gameId;
 
   if (!gameId) {
@@ -71,7 +72,7 @@ router.get('/main', (req, res) => {
 /**
  * POST /api/game/session — create a new game id (optional helper for clients)
  */
-router.post('/session', (req, res) => {
+router.post('/session', requireTelegramUserId, (req, res) => {
   const { gameId, stake } = req.body || {};
   const session = gameManager.createSession(
     gameId ? String(gameId) : null,
@@ -86,7 +87,7 @@ router.post('/session', (req, res) => {
   });
 });
 
-router.get('/sessions', (_req, res) => {
+router.get('/sessions', requireAdmin, (_req, res) => {
   res.json({ sessions: gameManager.listSessions() });
 });
 

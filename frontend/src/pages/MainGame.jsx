@@ -1061,6 +1061,20 @@ export default function MainGame() {
 
       const history = normalizeCalledNumbers(payload);
       if (history.length > 0) {
+        const seq = Number(payload?.sequence ?? history.length);
+        if (
+          Number.isFinite(seq) &&
+          seq > 0 &&
+          seq <= lastBallSequenceRef.current
+        ) {
+          return;
+        }
+        if (Number.isFinite(seq) && seq > 0) {
+          lastBallSequenceRef.current = Math.max(
+            lastBallSequenceRef.current,
+            seq
+          );
+        }
         syncCalledHistorySilentlyRef.current(history);
       }
     };

@@ -23,6 +23,12 @@ loadEnv();
 require('./config/paymentMethods').getPaymentMethods();
 
 let botInstance = null;
+const profileSyncLastAt = new Map();
+const PROFILE_SYNC_MIN_MS = Math.max(
+  30_000,
+  Number(process.env.BOT_PROFILE_SYNC_MIN_MS) || 60_000
+);
+const PROFILE_SYNC_MAP_MAX = 10_000;
 
 function createBot() {
   const token = process.env.BOT_TOKEN;
@@ -39,14 +45,24 @@ function createBot() {
   bot.use((ctx, next) => {
     const from = ctx.from;
     if (from?.id) {
-      void syncTelegramProfileFromClient({
-        telegramId: from.id,
-        username: from.username,
-        firstName: from.first_name,
-        lastName: from.last_name,
-      }).catch((err) => {
-        console.warn('[bot] user sync failed', from.id, err?.message);
-      });
+      const key = String(from.id);
+      const now = Date.now();
+      const last = profileSyncLastAt.get(key) || 0;
+      if (now - last >= PROFILE_SYNC_MIN_MS) {
+        profileSyncLastAt.set(key, now);
+        if (profileSyncLastAt.size > PROFILE_SYNC_MAP_MAX) {
+          const oldest = profileSyncLastAt.keys().next().value;
+          if (oldest != null) profileSyncLastAt.delete(oldest);
+        }
+        void syncTelegramProfileFromClient({
+          telegramId: from.id,
+          username: from.username,
+          firstName: from.first_name,
+          lastName: from.last_name,
+        }).catch((err) => {
+          console.warn('[bot] user sync failed', from.id, err?.message);
+        });
+      }
     }
     return next();
   });

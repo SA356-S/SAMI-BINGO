@@ -7,6 +7,9 @@ export const BINGO_COLUMNS = [
   { letter: 'O', min: 61, max: 75 },
 ];
 
+const GRID_CACHE = new Map();
+const GRID_CACHE_MAX = 512;
+
 function mulberry32(seed) {
   let t = seed;
   return () => {
@@ -32,7 +35,12 @@ function shufflePick(min, max, count, rng) {
  * Center cell is free (★). Each column respects B-I-N-G-O ranges.
  */
 export function generateBingoCard(cartelId) {
-  const rng = mulberry32(cartelId * 7919 + 104729);
+  const id = Number(cartelId);
+  if (GRID_CACHE.has(id)) {
+    return GRID_CACHE.get(id);
+  }
+
+  const rng = mulberry32(id * 7919 + 104729);
 
   const columnNumbers = BINGO_COLUMNS.map(({ min, max }, colIndex) => {
     const pickCount = colIndex === 2 ? 4 : 5;
@@ -53,7 +61,13 @@ export function generateBingoCard(cartelId) {
     }
   }
 
-  return { cartelId, grid };
+  const result = { cartelId: id, grid };
+  GRID_CACHE.set(id, result);
+  if (GRID_CACHE.size > GRID_CACHE_MAX) {
+    const oldest = GRID_CACHE.keys().next().value;
+    if (oldest != null) GRID_CACHE.delete(oldest);
+  }
+  return result;
 }
 
 /** Fixed cartels taken by other players (static, unclickable). */

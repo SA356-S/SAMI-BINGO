@@ -190,6 +190,75 @@ async function recordLoss(userId, { gameId, stake = 10 } = {}) {
   return stats;
 }
 
+async function batchLoadStatsMap(userIds) {
+  const keys = [...new Set(userIds.map((id) => String(id)).filter(Boolean))];
+  const map = new Map();
+
+  if (!keys.length) return map;
+
+  if (isDbReady()) {
+    const docs = await PlayerStatsModel.find({ userId: { $in: keys } }).lean();
+    for (const doc of docs) {
+      map.set(String(doc.userId), ensurePeriod({ ...doc }));
+    }
+    for (const key of keys) {
+      if (!map.has(key)) {
+        map.set(key, defaultStats(key));
+      }
+    }
+    return map;
+  }
+
+  for (const key of keys) {
+    if (!memoryStats.has(key)) {
+      memoryStats.set(key, defaultStats(key));
+    }
+    map.set(key, ensurePeriod({ ...memoryStats.get(key) }));
+  }
+  return map;
+}
+
+async function persistStatsBatch(statsMap) {
+  if (!statsMap.size) return;
+
+  if (isDbReady()) {
+    const ops = [];
+    for (const stats of statsMap.values()) {
+      ops.push({
+        updateOne: {
+          filter: { userId: String(stats.userId) },
+          update: { $set: stats },
+          upsert: true,
+        },
+      });
+    }
+    if (ops.length) {
+      await PlayerStatsModel.bulkWrite(ops, { ordered: false });
+    }
+    return;
+  }
+
+  for (const stats of statsMap.values()) {
+    memoryStats.set(String(stats.userId), { ...stats });
+  }
+}
+
+async function appendHistoryBatch(entries) {
+  if (!entries.length) return;
+
+  if (isDbReady()) {
+    await GameHistoryModel.insertMany(entries, { ordered: false });
+    return;
+  }
+
+  for (const entry of entries) {
+    memoryHistory.unshift(entry);
+  }
+  if (memoryHistory.length > MAX_HISTORY) {
+    memoryHistory.length = MAX_HISTORY;
+  }
+}
+
 async function recordRoundOutcome(session, winnerInfo = {}) {
   const players = session.allSeatedPlayers();
   const humanWinnerIds = new Set(
@@ -224,6 +293,15 @@ async function recordRoundOutcome(session, winnerInfo = {}) {
     if (fallbackId) humanWinnerIds.add(fallbackId);
   }
 
+  const userIds = players.map((player) =>
+    player.userId ? String(player.userId) : String(player.socketId)
+  );
+  const statsMap = await batchLoadStatsMap(userIds);
+  const historyRows = [];
+  const winnerEarnings = [];
+  const gameId = String(session.gameId);
+  const stake = Number(session.stake) || 0;
+
   for (const player of players) {
     const uid = player.userId ? String(player.userId) : String(player.socketId);
     const isWinner =
@@ -231,36 +309,106 @@ async function recordRoundOutcome(session, winnerInfo = {}) {
       (winnerUserId && uid === winnerUserId) ||
       (winnerSocketId && String(player.socketId) === winnerSocketId);
 
+    const stats = statsMap.get(uid) ?? defaultStats(uid);
+    statsMap.set(uid, stats);
+
     if (isWinner) {
-      await recordWin(uid, {
-        gameId: session.gameId,
-        stake: session.stake,
-        prize: humanWinnerCount > 1 ? prizeSharePerWinner : prizePool,
-        cartelId: winnerInfo.primaryCartelId ?? winnerInfo.cartelId,
-        winnerLabel: winnerInfo.winnerLabel,
+      const prize =
+        humanWinnerCount > 1 ? prizeSharePerWinner : prizePool;
+      stats.wins += 1;
+      stats.dailyWins += 1;
+      stats.weeklyWins += 1;
+      historyRows.push({
+        userId: uid,
+        gameId,
+        type: 'victory',
+        stake,
+        prize: Number(prize) || 0,
+        cartelId: winnerInfo.primaryCartelId ?? winnerInfo.cartelId ?? null,
+        winnerLabel: winnerInfo.winnerLabel ?? '',
+        finishedAt: new Date(),
       });
+      pushRecentWinner({
+        userId: uid,
+        username: formatUsername(uid),
+        gameId,
+        prize: Number(prize) || 0,
+        cartelId: winnerInfo.primaryCartelId ?? winnerInfo.cartelId ?? null,
+        winnerLabel: winnerInfo.winnerLabel ?? formatUsername(uid),
+        at: new Date().toISOString(),
+      });
+      winnerEarnings.push({ uid, prize: Number(prize) || 0 });
     } else {
-      await recordLoss(uid, { gameId: session.gameId, stake: session.stake });
+      stats.losses += 1;
+      historyRows.push({
+        userId: uid,
+        gameId,
+        type: 'finished',
+        stake,
+        prize: 0,
+        finishedAt: new Date(),
+      });
     }
+  }
+
+  await persistStatsBatch(statsMap);
+  await appendHistoryBatch(historyRows);
+
+  if (winnerEarnings.length) {
+    const { addEarnings } = require('./profileService');
+    await Promise.all(
+      winnerEarnings.map(({ uid, prize }) =>
+        addEarnings(uid, prize).catch(() => null)
+      )
+    );
   }
 }
 
 async function recordSessionStart(session) {
   const charged = new Set();
+  const userIds = [];
+
   for (const player of session.players.values()) {
     if (!player.cartelIds?.length) continue;
     const uid = player.userId ? String(player.userId) : String(player.socketId);
     if (charged.has(uid)) continue;
     charged.add(uid);
-    await recordGamePlayed(uid, { gameId: session.gameId, stake: session.stake });
+    userIds.push(uid);
   }
   for (const player of session.awayPlayers.values()) {
     if (!player.cartelIds?.length) continue;
     const uid = String(player.userId);
     if (charged.has(uid)) continue;
     charged.add(uid);
-    await recordGamePlayed(uid, { gameId: session.gameId, stake: session.stake });
+    userIds.push(uid);
   }
+
+  if (!userIds.length) return;
+
+  const statsMap = await batchLoadStatsMap(userIds);
+  const historyRows = [];
+  const gameId = String(session.gameId);
+  const stake = Number(session.stake) || 0;
+  const finishedAt = new Date();
+
+  for (const uid of userIds) {
+    const stats = statsMap.get(uid) ?? defaultStats(uid);
+    stats.gamesPlayed += 1;
+    stats.dailyGames += 1;
+    stats.weeklyGames += 1;
+    statsMap.set(uid, stats);
+    historyRows.push({
+      userId: uid,
+      gameId,
+      type: 'played',
+      stake,
+      prize: 0,
+      finishedAt,
+    });
+  }
+
+  await persistStatsBatch(statsMap);
+  await appendHistoryBatch(historyRows);
 }
 
 async function getAllStats() {

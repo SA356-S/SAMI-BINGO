@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react';
 import { Star } from 'lucide-react';
 import { generateBingoCard } from '../utils/bingoCard';
 
@@ -29,8 +30,8 @@ const HEADER_CELL =
 const BODY_CELL =
   'flex h-[clamp(26px,7vw,28px)] w-[clamp(22px,6.5vw,28px)] shrink-0 items-center justify-center rounded-sm border border-gray-400/70 bg-white text-[clamp(9px,2.6vw,10px)] font-bold leading-none tabular-nums text-gray-900';
 
-export default function BingoGrid({ cartelId }) {
-  const { grid } = generateBingoCard(cartelId);
+function BingoGrid({ cartelId }) {
+  const grid = useMemo(() => generateBingoCard(cartelId).grid, [cartelId]);
 
   return (
     <article className={CARD_SHELL}>
@@ -73,3 +74,5 @@ export default function BingoGrid({ cartelId }) {
     </article>
   );
 }
+
+export default memo(BingoGrid);
