@@ -84,6 +84,8 @@ export async function fetchGameData(userId) {
       gameStatus: data.gameStatus ?? null,
       watchingOnly: Boolean(data.watchingOnly),
       status: data.status ?? 'waiting',
+      lobbyRevision: data.lobbyRevision ?? data.selectionVersion ?? null,
+      selectionVersion: data.selectionVersion ?? data.lobbyRevision ?? null,
     };
   } catch {
     return {

@@ -174,26 +174,7 @@ export default function CardSelection() {
   );
 
   useEffect(() => {
-    return subscribeLobby((snap) => {
-      setLobby((prev) => {
-        if (
-          prev.gameId === snap.gameId &&
-          prev.countdownSeconds === snap.countdownSeconds &&
-          prev.playersCount === snap.playersCount &&
-          prev.selectionLocked === snap.selectionLocked &&
-          prev.gameInProgress === snap.gameInProgress &&
-          prev.lobbyPhase === snap.lobbyPhase &&
-          prev.gameStatus === snap.gameStatus &&
-          prev.selectedCartels.length === snap.selectedCartels.length &&
-          prev.selectedCartels.every((n, i) => n === snap.selectedCartels[i]) &&
-          prev.takenCartels.size === snap.takenCartels.size &&
-          [...prev.takenCartels].every((n) => snap.takenCartels.has(n))
-        ) {
-          return prev;
-        }
-        return snap;
-      });
-    });
+    return subscribeLobby(setLobby);
   }, []);
 
   const toggleCartel = useCallback(
@@ -244,7 +225,7 @@ export default function CardSelection() {
     const data = await fetchGameData(userId);
     setMainWallet(data.mainWallet);
     setPlayWallet(data.playWallet);
-    applyLobbyPayload(data, { mergeCartels: true });
+    applyLobbyPayload(data, { mergeCartels: false, mergeTaken: true });
   }, []);
 
   useEffect(() => {

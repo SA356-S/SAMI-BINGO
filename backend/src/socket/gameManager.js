@@ -258,6 +258,8 @@ class GameSession {
       playersCount: this.playersCount,
       selectionLocked: this.isSelectionLocked(),
       gameInProgress: this.status === 'calling',
+      lobbyRevision: this._roomStateEpoch,
+      selectionVersion: this._roomStateEpoch,
     };
     return this._roomLobbyCoreCache;
   }
@@ -1400,6 +1402,8 @@ class GameSession {
       pot: this.derash,
       playersCount: this.playersCount,
       clearGame: true,
+      lobbyRevision: this._roomStateEpoch,
+      selectionVersion: this._roomStateEpoch,
     };
   }
 
@@ -1641,6 +1645,8 @@ class GameSession {
         Boolean(userId) &&
         this.isSelectionLocked() &&
         myCartels.length === 0,
+      lobbyRevision: this._roomStateEpoch,
+      selectionVersion: this._roomStateEpoch,
     };
   }
 
