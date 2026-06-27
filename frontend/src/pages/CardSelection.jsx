@@ -8,7 +8,7 @@ import Navbar from '../components/Navbar';
 import {
   getLobbyState,
   subscribeLobby,
-  updateSelectedCartels,
+  toggleCartelSelection,
   applyLobbyPayload,
 } from '../services/lobbySession';
 import { getPlayerUserId, initTelegramWebApp } from '../api/playerIdentity';
@@ -159,10 +159,6 @@ export default function CardSelection() {
     return map;
   }, [getCartelStatus]);
 
-  const totalWalletBalance = mainWallet + playWallet;
-  const canAffordNextCartel =
-    totalWalletBalance >= GAME_ENTRY_STAKE * (selectedCartels.length + 1);
-
   const selectionCount = selectedCartels.length;
   const isDual = selectionCount === 2;
   const navigateTab = useCallback(
@@ -183,36 +179,27 @@ export default function CardSelection() {
         return;
       }
 
-      const isSelected = selectedCartels.includes(num);
+      const result = toggleCartelSelection(num, {
+        maxCartels: MAX_CARTELS,
+        entryStake: GAME_ENTRY_STAKE,
+        totalWalletBalance: mainWallet + playWallet,
+      });
 
-      if (isSelected) {
-        updateSelectedCartels(selectedCartels.filter((n) => n !== num));
-        setTopBanner(null);
-        return;
-      }
-
-      if (otherTakenCartels.has(num)) {
-        return;
-      }
-
-      if (selectedCartels.length >= MAX_CARTELS) {
-        setTopBanner('⚠️ MAXIMUM 2 CARTELS ALLOWED');
-        return;
-      }
-
-      if (!canAffordNextCartel) {
-        setTopBanner('⚠️ INSUFFICIENT BALANCE!');
+      if (!result.ok) {
+        if (result.reason === 'max') {
+          setTopBanner('⚠️ MAXIMUM 2 CARTELS ALLOWED');
+        } else if (result.reason === 'balance') {
+          setTopBanner('⚠️ INSUFFICIENT BALANCE!');
+        }
         return;
       }
 
       setTopBanner(null);
-      void unlockGameAudio();
-      const next = [...selectedCartels, num]
-        .sort((a, b) => a - b)
-        .slice(0, MAX_CARTELS);
-      updateSelectedCartels(next);
+      if (result.action === 'select') {
+        void unlockGameAudio();
+      }
     },
-    [selectedCartels, otherTakenCartels, canAffordNextCartel, selectionLocked]
+    [selectionLocked, mainWallet, playWallet]
   );
 
   const walletSetters = useMemo(

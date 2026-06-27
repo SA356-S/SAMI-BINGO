@@ -214,14 +214,62 @@ function applyServerTime(payload) {
   }
 }
 
-function mergeServerCartels(serverCartels) {
-  if (!Array.isArray(serverCartels)) return;
-
-  if (
+function hasPendingSelection() {
+  return (
+    localSelectionDirty ||
     selectionSyncInFlight ||
-    pendingReleaseCartels.size > 0 ||
-    localSelectionDirty
-  ) {
+    pendingReleaseCartels.size > 0
+  );
+}
+
+function selectionSignature(cartels) {
+  return [...cartels].map(Number).filter((n) => n >= 1).sort((a, b) => a - b).join(',');
+}
+
+function extractTakenSource(payload = {}) {
+  const others = payload.takenByOthers ?? payload.takenByOther ?? null;
+  const takenRaw = payload.takenCartels ?? payload.taken ?? payload.occupied;
+
+  if (Array.isArray(others)) {
+    return others;
+  }
+  if (Array.isArray(takenRaw)) {
+    return takenRaw;
+  }
+  if (takenRaw instanceof Set) {
+    return [...takenRaw];
+  }
+  return [];
+}
+
+/** Derive takenCartels from server payload + current local selection authority. */
+function applyTakenFromServer(payload = {}) {
+  const mine = new Set(state.selectedCartels);
+  const incoming = extractTakenSource(payload)
+    .map(Number)
+    .filter((n) => n >= 1 && !mine.has(n) && !pendingReleaseCartels.has(n));
+
+  if (!hasPendingSelection()) {
+    state.takenCartels = new Set(incoming);
+    return;
+  }
+
+  const next = new Set(state.takenCartels);
+  for (const id of [...next]) {
+    if (mine.has(id) || pendingReleaseCartels.has(id)) {
+      next.delete(id);
+    }
+  }
+  for (const id of incoming) {
+    if (!mine.has(id) && !pendingReleaseCartels.has(id)) {
+      next.add(id);
+    }
+  }
+  state.takenCartels = next;
+}
+
+function mergeServerCartels(serverCartels) {
+  if (!Array.isArray(serverCartels) || hasPendingSelection()) {
     return;
   }
 
@@ -237,45 +285,47 @@ function mergeServerCartels(serverCartels) {
   }
 }
 
-function applyTakenFromServer(payload = {}) {
-  const mine = new Set(state.selectedCartels);
-  const others = payload.takenByOthers ?? payload.takenByOther ?? null;
-  const takenRaw = payload.takenCartels ?? payload.taken ?? payload.occupied;
-
-  let source = [];
-  if (Array.isArray(others)) {
-    source = others;
-  } else if (Array.isArray(takenRaw)) {
-    source = takenRaw;
-  } else if (takenRaw instanceof Set) {
-    source = [...takenRaw];
-  }
-
-  state.takenCartels = new Set(
-    source
-      .map(Number)
-      .filter(
-        (n) => n >= 1 && !mine.has(n) && !pendingReleaseCartels.has(n)
-      )
-  );
-}
-
-function applyServerSelectionAck(ack = {}) {
+/** ACK confirms server accepted the in-flight list — never overrides newer local edits. */
+function confirmSelectionAck(ack = {}) {
   const raw = ack.myCartels ?? ack.selectedCartels ?? [];
-  const next = Array.isArray(raw)
+  const confirmed = Array.isArray(raw)
     ? raw.map(Number).filter((n) => n >= 1)
     : [];
 
-  state.selectedCartels = next;
+  if (selectionSignature(confirmed) !== selectionSignature(state.selectedCartels)) {
+    return false;
+  }
 
-  for (const id of next) {
+  localSelectionDirty = false;
+  for (const id of confirmed) {
     pendingReleaseCartels.delete(id);
   }
   for (const id of [...pendingReleaseCartels]) {
-    if (!next.includes(id)) {
+    if (!confirmed.includes(id)) {
       pendingReleaseCartels.delete(id);
     }
   }
+  return true;
+}
+
+function applyLocalSelectionChange(next) {
+  const prev = new Set(state.selectedCartels);
+  const nextSet = new Set(next);
+
+  for (const id of prev) {
+    if (!nextSet.has(id)) {
+      state.takenCartels.delete(id);
+      pendingReleaseCartels.add(id);
+    }
+  }
+
+  for (const id of next) {
+    pendingReleaseCartels.delete(id);
+    state.takenCartels.delete(id);
+  }
+
+  state.selectedCartels = next;
+  localSelectionDirty = true;
 }
 
 export function applyLobbyPayload(
@@ -304,11 +354,7 @@ export function applyLobbyPayload(
     state.countdownExpiredSignaled = false;
     releaseMainGameAutoEntryIfIdle();
   } else if (replace) {
-    if (
-      !selectionSyncInFlight &&
-      pendingReleaseCartels.size === 0 &&
-      !localSelectionDirty
-    ) {
+    if (!hasPendingSelection()) {
       const serverCartels = payload.myCartels ?? payload.selectedCartels;
       state.selectedCartels = Array.isArray(serverCartels)
         ? serverCartels.map(Number).filter((n) => n >= 1)
@@ -321,7 +367,11 @@ export function applyLobbyPayload(
   if (payload.gameId) state.gameId = payload.gameId;
 
   if (mergeTaken || replace) {
-    if (replace && !Array.isArray(payload.takenCartels ?? payload.taken)) {
+    if (
+      replace &&
+      !hasPendingSelection() &&
+      !Array.isArray(payload.takenCartels ?? payload.taken)
+    ) {
       state.takenCartels = new Set();
     } else {
       applyTakenFromServer(payload);
@@ -423,11 +473,14 @@ function syncSelectionToServer() {
         incoming: parseLobbyRevision(ack),
         current: state.lobbyRevision,
       });
+      if (localSelectionDirty) {
+        syncSelectionToServer();
+      }
       return;
     }
 
-    applyServerSelectionAck(ack);
-    localSelectionDirty = false;
+    applyLobbyRevisionFromPayload(ack);
+    confirmSelectionAck(ack);
     applyLobbyPayload(
       {
         ...ack,
@@ -441,6 +494,9 @@ function syncSelectionToServer() {
 
   const timer = setTimeout(() => {
     finish({ ok: false, error: 'timeout' });
+    if (localSelectionDirty && generation === selectionSyncGeneration) {
+      syncSelectionToServer();
+    }
   }, SELECT_ACK_TIMEOUT_MS);
 
   const onAck = (ack) => {
@@ -473,26 +529,66 @@ export function updateSelectedCartels(cartels) {
     return;
   }
 
-  const prev = new Set(state.selectedCartels);
   const next = [...cartels].map(Number).filter((n) => n >= 1);
-  const nextSet = new Set(next);
-
-  for (const id of prev) {
-    if (!nextSet.has(id)) {
-      state.takenCartels.delete(id);
-      pendingReleaseCartels.add(id);
-    }
+  if (selectionSignature(next) === selectionSignature(state.selectedCartels)) {
+    return;
   }
 
-  for (const id of next) {
-    pendingReleaseCartels.delete(id);
-  }
-
-  state.selectedCartels = next;
-  localSelectionDirty = true;
+  applyLocalSelectionChange(next);
   lastNotifyFingerprint = '';
   notify(true);
   syncSelectionToServer();
+}
+
+/**
+ * Toggle cartel selection using module state (safe for rapid clicks — no React stale closures).
+ * @returns {{ ok: boolean, reason?: 'locked'|'taken'|'max'|'balance' }}
+ */
+export function toggleCartelSelection(
+  num,
+  { maxCartels = 2, entryStake = GAME_ENTRY_STAKE, totalWalletBalance = 0 } = {}
+) {
+  const n = Number(num);
+  if (!Number.isFinite(n) || n < 1) {
+    return { ok: false, reason: 'invalid' };
+  }
+
+  if (state.selectionLocked || state.gameInProgress) {
+    return { ok: false, reason: 'locked' };
+  }
+
+  const current = state.selectedCartels;
+  const isSelected = current.includes(n);
+
+  if (isSelected) {
+    updateSelectedCartels(current.filter((id) => id !== n));
+    return { ok: true, action: 'deselect' };
+  }
+
+  if (state.takenCartels.has(n)) {
+    return { ok: false, reason: 'taken' };
+  }
+
+  if (current.length >= maxCartels) {
+    return { ok: false, reason: 'max' };
+  }
+
+  if (totalWalletBalance < entryStake * (current.length + 1)) {
+    return { ok: false, reason: 'balance' };
+  }
+
+  const next = [...current, n]
+    .sort((a, b) => a - b)
+    .slice(0, maxCartels);
+  updateSelectedCartels(next);
+  return { ok: true, action: 'select' };
+}
+
+export function isCartelTakenByOthers(num) {
+  const n = Number(num);
+  if (state.selectedCartels.includes(n)) return false;
+  if (pendingReleaseCartels.has(n)) return false;
+  return state.takenCartels.has(n);
 }
 
 async function refreshFromApi({ replace = false } = {}) {
@@ -627,7 +723,7 @@ function registerLobbySocketHandlers() {
 
   const onLobbyConnect = () => {
     register();
-    if (state.selectedCartels.length > 0) {
+    if (state.selectedCartels.length > 0 && !hasPendingSelection()) {
       syncSelectionToServer();
     }
   };
