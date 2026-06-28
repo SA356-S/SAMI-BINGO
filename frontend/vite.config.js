@@ -55,27 +55,40 @@ function bingoSoundsPlugin() {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), bingoSoundsPlugin()],
-  server: {
-    port: 5174,
-    strictPort: true,
-    host: '0.0.0.0',
-    allowedHosts: true,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-      },
-      '/socket.io': {
-        target: 'http://localhost:3001',
-        ws: true,
-        changeOrigin: true,
-      },
-      '/uploads': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
+export default defineConfig(({ mode }) => {
+  const isProduction = mode === 'production';
+
+  return {
+    plugins: [react(), bingoSoundsPlugin()],
+    build: {
+      sourcemap: false,
+      minify: 'esbuild',
+      ...(isProduction && {
+        esbuild: {
+          drop: ['console', 'debugger'],
+        },
+      }),
+    },
+    server: {
+      port: 5174,
+      strictPort: true,
+      host: '0.0.0.0',
+      allowedHosts: true,
+      proxy: {
+        '/api': {
+          target: 'http://localhost:3001',
+          changeOrigin: true,
+        },
+        '/socket.io': {
+          target: 'http://localhost:3001',
+          ws: true,
+          changeOrigin: true,
+        },
+        '/uploads': {
+          target: 'http://localhost:3001',
+          changeOrigin: true,
+        },
       },
     },
-  },
+  };
 });
