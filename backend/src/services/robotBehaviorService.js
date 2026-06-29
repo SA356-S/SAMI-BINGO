@@ -434,11 +434,35 @@ function declareRobotWinner(io, session, rt, cartelId, t) {
   return true;
 }
 
-function trySubmitPendingClaims(io, session, runtime, advantageLevel, t) {
+function countPaidEnabledRobots(runtime) {
+  return [...runtime.values()].filter(
+    (rt) => rt.paidForRound && rt.enabled !== false
+  ).length;
+}
+
+function getDesignatedWinnerRobotId(session, runtime, state) {
+  if (state?.designatedWinnerRobotId) {
+    return String(state.designatedWinnerRobotId);
+  }
+  const plan = robotDrawAssist.getRoundPlan(session?.gameId);
+  if (plan?.robotId) return String(plan.robotId);
+  return null;
+}
+
+function robotIsDesignatedWinner(rt, designatedRobotId, runtime) {
+  if (!designatedRobotId || countPaidEnabledRobots(runtime) <= 1) {
+    return true;
+  }
+  return String(rt.robotId) === String(designatedRobotId);
+}
+
+function trySubmitPendingClaims(io, session, runtime, advantageLevel, t, state) {
   const claimDelay = getRobotClaimDelayMs(advantageLevel);
   readSessionWinPercent(session);
+  const designatedRobotId = getDesignatedWinnerRobotId(session, runtime, state);
 
   for (const rt of runtime.values()) {
+    if (!robotIsDesignatedWinner(rt, designatedRobotId, runtime)) continue;
     if (!rt.pendingClaim || rt.claimedForRound) continue;
     if (!rt.paidForRound) {
       rt.pendingClaim = null;
@@ -474,8 +498,9 @@ function tryEvaluateBingos(io, session, cfg, runtime, state, advantageLevel) {
 
   const t = now();
   const level = clampRobotAdvantageLevel(advantageLevel);
+  const designatedRobotId = getDesignatedWinnerRobotId(session, runtime, state);
 
-  if (trySubmitPendingClaims(io, session, runtime, level, t)) {
+  if (trySubmitPendingClaims(io, session, runtime, level, t, state)) {
     return;
   }
   if (session.status !== 'calling') return;
@@ -483,6 +508,7 @@ function tryEvaluateBingos(io, session, cfg, runtime, state, advantageLevel) {
   state.lastBingoEvalCalledLen = calledLen;
 
   for (const rt of runtime.values()) {
+    if (!robotIsDesignatedWinner(rt, designatedRobotId, runtime)) continue;
     if (!isParticipatingRobot(session, rt)) continue;
     if (rt.claimedForRound) continue;
 
@@ -534,7 +560,29 @@ function markPaidRobotsIfStakesCharged(session, runtime, state, advantageLevel =
     }
   }
 
-  robotDrawAssist.createRoundPlan(session, runtime, advantageLevel);
+  const paidForRotation = [...runtime.values()].filter(
+    (rt) => rt.paidForRound && rt.enabled !== false
+  );
+  const designatedWinner = robotDrawAssist.pickDesignatedWinnerRobot(
+    paidForRotation,
+    state.lastWinnerRobotId ?? null
+  );
+  state.designatedWinnerRobotId = designatedWinner?.robotId ?? null;
+
+  robotDrawAssist.createRoundPlan(session, runtime, advantageLevel, {
+    designatedRobotId: state.designatedWinnerRobotId,
+    lastWinnerRobotId: state.lastWinnerRobotId ?? null,
+  });
+
+  if (state.designatedWinnerRobotId && paidForRotation.length > 1) {
+    console.info('[robots] Designated winner rotation', {
+      gameId: session.gameId,
+      roundId,
+      designatedWinnerRobotId: state.designatedWinnerRobotId,
+      lastWinnerRobotId: state.lastWinnerRobotId ?? null,
+      paidRobots: paidForRotation.map((rt) => rt.robotId),
+    });
+  }
 
   return roundId;
 }
@@ -590,6 +638,10 @@ function tryResolveRoundOutcome(io, session, runtime, state, roundId, winnerPseu
   }
 
   state.lastResolvedRoundId = roundId;
+  if (winnerRt?.robotId) {
+    state.lastWinnerRobotId = winnerRt.robotId;
+  }
+  state.designatedWinnerRobotId = null;
   robotDrawAssist.clearRoundPlan(session.gameId);
 
   broadcastAdmin('admin:robotActivity', {

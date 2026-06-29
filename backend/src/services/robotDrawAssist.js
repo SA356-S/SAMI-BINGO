@@ -81,6 +81,38 @@ function getPaidRobots(runtime, session) {
   });
 }
 
+/** Stable order for fair winner rotation across rounds. */
+function sortRobotsForWinnerRotation(robots = []) {
+  return [...robots].sort((a, b) => {
+    const nameCmp = String(a.displayName || '').localeCompare(
+      String(b.displayName || ''),
+      undefined,
+      { sensitivity: 'base' }
+    );
+    if (nameCmp !== 0) return nameCmp;
+    return String(a.robotId).localeCompare(String(b.robotId));
+  });
+}
+
+/**
+ * Pick the next designated robot winner in round-robin order among enabled paid robots.
+ * Skips robots that are OFF; if only one is ON, returns that robot.
+ */
+function pickDesignatedWinnerRobot(paidRobots = [], lastWinnerRobotId = null) {
+  const eligible = sortRobotsForWinnerRotation(
+    paidRobots.filter((rt) => rt.enabled !== false)
+  );
+  if (!eligible.length) return null;
+  if (eligible.length === 1) return eligible[0];
+
+  const lastId = lastWinnerRobotId ? String(lastWinnerRobotId) : '';
+  const lastIdx = lastId
+    ? eligible.findIndex((rt) => String(rt.robotId) === lastId)
+    : -1;
+  const nextIdx = lastIdx < 0 ? 0 : (lastIdx + 1) % eligible.length;
+  return eligible[nextIdx];
+}
+
 function buildPlanForRobot(rt, advantageLevel) {
   const targetBallCount = getRobotTargetWinBallCount(advantageLevel, rt.robotId);
   if (targetBallCount == null) return null;
@@ -107,9 +139,9 @@ function buildPlanForRobot(rt, advantageLevel) {
   return best;
 }
 
-function createRoundPlan(session, runtime, advantageLevel) {
+function createRoundPlan(session, runtime, advantageLevel, options = {}) {
   const level = clampRobotAdvantageLevel(advantageLevel);
-  if (!session?.gameId || level <= 0) {
+  if (!session?.gameId) {
     roundPlans.delete(session?.gameId);
     return null;
   }
@@ -120,20 +152,31 @@ function createRoundPlan(session, runtime, advantageLevel) {
     return null;
   }
 
-  let plan = null;
-  for (const rt of paid) {
-    const candidate = buildPlanForRobot(rt, level);
-    if (!candidate) continue;
-    if (
-      !plan ||
-      candidate.targetBallCount < plan.targetBallCount ||
-      (candidate.targetBallCount === plan.targetBallCount &&
-        candidate.lineNumbers.length < plan.lineNumbers.length)
-    ) {
-      plan = candidate;
-    }
+  const designatedRobotId = options.designatedRobotId ?? null;
+  let owner =
+    (designatedRobotId
+      ? paid.find((rt) => String(rt.robotId) === String(designatedRobotId))
+      : null) ??
+    pickDesignatedWinnerRobot(paid, options.lastWinnerRobotId ?? null);
+
+  if (!owner) {
+    roundPlans.delete(session.gameId);
+    return null;
   }
 
+  if (level <= 0) {
+    const designationPlan = {
+      robotId: owner.robotId,
+      pseudoSocketId: owner.pseudoSocketId,
+      gameId: session.gameId,
+      advantageLevel: 0,
+      designationOnly: true,
+    };
+    roundPlans.set(session.gameId, designationPlan);
+    return designationPlan;
+  }
+
+  const plan = buildPlanForRobot(owner, level);
   if (!plan) {
     roundPlans.delete(session.gameId);
     return null;
@@ -151,11 +194,7 @@ function createRoundPlan(session, runtime, advantageLevel) {
     biasStartBall,
   };
   roundPlans.set(session.gameId, fullPlan);
-
-  const owner = paid.find((rt) => rt.robotId === plan.robotId);
-  if (owner) {
-    owner.targetWinBallCount = plan.targetBallCount;
-  }
+  owner.targetWinBallCount = plan.targetBallCount;
 
   return fullPlan;
 }
@@ -174,11 +213,17 @@ function refreshPlanTarget(session, runtime) {
     return createRoundPlan(session, runtime, level);
   }
 
+  if (existing.designationOnly && level > 0) {
+    return createRoundPlan(session, runtime, level, {
+      designatedRobotId: existing.robotId,
+    });
+  }
+
   const paid = getPaidRobots(runtime, session);
   const owner =
     paid.find((rt) => rt.robotId === existing.robotId) ??
     paid.find((rt) => rt.pseudoSocketId === existing.pseudoSocketId) ??
-    paid[0];
+    pickDesignatedWinnerRobot(paid);
 
   if (!owner) {
     clearRoundPlan(session.gameId);
@@ -218,7 +263,7 @@ function suggestNextBall(calledSet, session, runtime) {
       plan = createRoundPlan(session, runtime, level);
     }
   }
-  if (!plan) return null;
+  if (!plan || plan.designationOnly) return null;
 
   if (runtime) {
     const refreshed = refreshPlanTarget(session, runtime);
@@ -296,4 +341,6 @@ module.exports = {
   hasValidRobotBingo,
   getCartelLineOptions,
   installDrawAssist,
+  pickDesignatedWinnerRobot,
+  sortRobotsForWinnerRotation,
 };

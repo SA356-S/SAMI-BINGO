@@ -28,6 +28,8 @@ const state = {
   lastResolvedRoundId: 0,
   lastBingoEvalCalledLen: 0,
   lastOpsCapLogAt: 0,
+  lastWinnerRobotId: null,
+  designatedWinnerRobotId: null,
 };
 
 function now() {
