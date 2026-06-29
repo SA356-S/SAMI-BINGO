@@ -17,6 +17,12 @@ const {
   trackRobotRoomMember,
   untrackRobotRoomMember,
 } = require('./robotRoomRegistry');
+const settingsService = require('./settingsService');
+
+/** Seconds after lobby countdown starts before any robot may select (45s → join at ≤38s left). */
+const ROBOT_LOBBY_JOIN_DELAY_AFTER_COUNTDOWN_START_SEC = 7;
+/** Per-robot spread so selections do not happen at the same instant (45s → 38–34s left). */
+const ROBOT_LOBBY_JOIN_TIMING_SPREAD_SEC = 4;
 
 function now() {
   return Date.now();
@@ -51,6 +57,88 @@ function randomInt(min, max) {
   const hi = Math.max(a, b);
   if (hi <= lo) return lo;
   return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
+
+function pickRobotJoinRemainingTarget(totalSec) {
+  const total = Math.max(
+    1,
+    Math.floor(Number(totalSec) || settingsService.getCardSelectionTimeSync())
+  );
+  const maxRemaining = Math.max(
+    1,
+    total - ROBOT_LOBBY_JOIN_DELAY_AFTER_COUNTDOWN_START_SEC
+  );
+  const minRemaining = Math.max(
+    1,
+    maxRemaining - ROBOT_LOBBY_JOIN_TIMING_SPREAD_SEC
+  );
+  return randomInt(minRemaining, maxRemaining);
+}
+
+function needsRobotJoinReschedule(rt, session) {
+  const endsAt = session?.lobbyCountdownEndsAt ?? null;
+  return endsAt != null && rt._joinCountdownEndsAt !== endsAt;
+}
+
+function scheduleRobotLobbyJoin(rt, session) {
+  if (!session || session.status !== 'waiting' || session.stakesCharged) {
+    return;
+  }
+
+  if (
+    !needsRobotJoinReschedule(rt, session) &&
+    rt._joinWhenRemainingSec != null &&
+    rt.nextJoinAt != null
+  ) {
+    return;
+  }
+
+  const totalSec = settingsService.getCardSelectionTimeSync();
+  const targetRemaining = pickRobotJoinRemainingTarget(totalSec);
+  rt._joinWhenRemainingSec = targetRemaining;
+  rt._joinCountdownEndsAt = session.lobbyCountdownEndsAt ?? null;
+
+  const remaining =
+    typeof session.getLobbyCountdownRemaining === 'function'
+      ? session.getLobbyCountdownRemaining()
+      : totalSec;
+
+  if (remaining <= targetRemaining) {
+    rt.nextJoinAt = now();
+  } else {
+    rt.nextJoinAt = now() + (remaining - targetRemaining) * 1000;
+  }
+}
+
+function isRobotLobbyJoinDue(session, rt, options = {}) {
+  if (options.forceBeforeRoundStart === true) return true;
+  if (!canRobotsJoinLobby(session)) return false;
+  if (
+    session.lobbyPhase &&
+    session.lobbyPhase !== LOBBY_PHASE.COUNTDOWN_RUNNING
+  ) {
+    return false;
+  }
+
+  if (typeof session.getLobbyCountdownRemaining !== 'function') return false;
+
+  const remaining = session.getLobbyCountdownRemaining();
+  if (remaining <= 0) return false;
+
+  if (needsRobotJoinReschedule(rt, session) || rt._joinWhenRemainingSec == null) {
+    scheduleRobotLobbyJoin(rt, session);
+  }
+
+  const maxRemainingAllowed = Math.max(
+    1,
+    settingsService.getCardSelectionTimeSync() -
+      ROBOT_LOBBY_JOIN_DELAY_AFTER_COUNTDOWN_START_SEC
+  );
+  if (remaining > maxRemainingAllowed) return false;
+  if (remaining > rt._joinWhenRemainingSec) return false;
+  if (rt.nextJoinAt != null && now() < rt.nextJoinAt) return false;
+
+  return true;
 }
 
 function pickAvailableCartels(session, count) {
@@ -131,7 +219,9 @@ function createRuntimeEntry(robot) {
     displayName: robot.name || robot.displayName || id,
     username: robot.username || '',
     pseudoSocketId: `robot-sock:${id}`,
-    nextJoinAt: now() + 2000 + Math.floor(Math.random() * 5000),
+    nextJoinAt: null,
+    _joinWhenRemainingSec: null,
+    _joinCountdownEndsAt: null,
     nextLeaveAt: null,
     active: false,
     currentRoundCartels: [],
@@ -175,8 +265,6 @@ function emitPlayersUpdate(io, session) {
 }
 
 function tryJoin(session, io, rt, cfg, runtime, activeCountFn, options = {}) {
-  const eager = options.eager === true;
-
   if (!canRobotsJoinLobby(session)) return false;
   if (!rt.enabled) return false;
   if (cfg.enabledGlobal !== true) return false;
@@ -190,7 +278,10 @@ function tryJoin(session, io, rt, cfg, runtime, activeCountFn, options = {}) {
   }
 
   if (rt.active && rt.currentRoundCartels?.length) return true;
-  if (!eager && rt.nextJoinAt != null && now() < rt.nextJoinAt) return false;
+  if (!isRobotLobbyJoinDue(session, rt, options)) {
+    scheduleRobotLobbyJoin(rt, session);
+    return false;
+  }
   if (typeof activeCountFn === 'function' && activeCountFn() >= cfg.maxActiveRobots) {
     return false;
   }
@@ -276,7 +367,9 @@ function tryLeave(session, io, rt, cfg) {
     rt.currentRoundCartels = [];
     rt.paidForRound = false;
     rt.claimedForRound = false;
-    rt.nextJoinAt = now() + Math.floor(Math.random() * (cfg.joinJitterMs || 0));
+    rt._joinWhenRemainingSec = null;
+    rt._joinCountdownEndsAt = null;
+    rt.nextJoinAt = null;
     rt.nextLeaveAt = null;
     emitGameStatus(session);
     emitPlayersUpdate(io, session);
@@ -299,7 +392,9 @@ function tryLeave(session, io, rt, cfg) {
   rt.currentRoundCartels = [];
   rt.paidForRound = false;
   rt.claimedForRound = false;
-  rt.nextJoinAt = now() + Math.floor(Math.random() * (cfg.joinJitterMs || 0));
+  rt._joinWhenRemainingSec = null;
+  rt._joinCountdownEndsAt = null;
+  rt.nextJoinAt = null;
   rt.nextLeaveAt = null;
   rt.lastEventAt = now();
 
@@ -632,7 +727,9 @@ function tryResolveRoundOutcome(io, session, runtime, state, roundId, winnerPseu
     rt.currentRoundCartels = [];
     rt.active = false;
     rt.currentRoundId = 0;
-    rt.nextJoinAt = now() + Math.floor(Math.random() * (cfg.joinJitterMs || 0));
+    rt._joinWhenRemainingSec = null;
+    rt._joinCountdownEndsAt = null;
+    rt.nextJoinAt = null;
     rt.nextLeaveAt = null;
     resetRobotRoundTiming(rt);
   }
@@ -659,7 +756,6 @@ function syncAllActiveRobotsIntoSession(session, io, cfg, runtime, options = {})
   if (!canRobotsJoinLobby(session)) return 0;
   if (cfg.enabledGlobal !== true) return 0;
 
-  const eager = options.eager === true;
   const enabledRobots = [...runtime.values()].filter((rt) => rt.enabled);
   if (!enabledRobots.length) return 0;
 
@@ -679,11 +775,11 @@ function syncAllActiveRobotsIntoSession(session, io, cfg, runtime, options = {})
       continue;
     }
 
-    if (eager) {
-      rt.nextJoinAt = now();
+    if (!rt.active) {
+      scheduleRobotLobbyJoin(rt, session);
     }
 
-    if (tryJoin(session, io, rt, cfg, runtime, activeCount, { eager })) {
+    if (tryJoin(session, io, rt, cfg, runtime, activeCount, options)) {
       joined += 1;
     }
   }
@@ -694,7 +790,18 @@ function syncAllActiveRobotsIntoSession(session, io, cfg, runtime, options = {})
 function runLobbyTick(session, io, cfg, runtime, state) {
   if (!canRobotsJoinLobby(session)) return;
 
-  syncAllActiveRobotsIntoSession(session, io, cfg, runtime, { eager: true });
+  for (const rt of runtime.values()) {
+    if (!rt.enabled) continue;
+    if (session.players.get(rt.pseudoSocketId)?.cartelIds?.length) {
+      rt.active = true;
+      syncCartelsFromSession(session, rt);
+      trackRobotRoomMember(session, rt);
+      continue;
+    }
+    if (!rt.active) {
+      scheduleRobotLobbyJoin(rt, session);
+    }
+  }
 
   const MAX_OPS_PER_TICK = Math.max(6, Math.floor((cfg.maxActiveRobots || 10) * 2));
   let opsUsed = 0;
@@ -709,7 +816,9 @@ function runLobbyTick(session, io, cfg, runtime, state) {
       rt.paidForRound = false;
       rt.claimedForRound = false;
       rt.currentRoundId = 0;
-      rt.nextJoinAt = now() + Math.floor(Math.random() * (cfg.joinJitterMs || 0));
+      rt._joinWhenRemainingSec = null;
+      rt._joinCountdownEndsAt = null;
+      rt.nextJoinAt = null;
       rt.nextLeaveAt = null;
     }
     try {
@@ -745,9 +854,9 @@ function runLobbyTick(session, io, cfg, runtime, state) {
       continue;
     }
 
-    if (!rt.active && (rt.nextJoinAt == null || now() >= rt.nextJoinAt)) {
+    if (!rt.active && isRobotLobbyJoinDue(session, rt)) {
       if (activeCount() >= cfg.maxActiveRobots) continue;
-      tryJoin(session, io, rt, cfg, runtime, activeCount, { eager: false });
+      tryJoin(session, io, rt, cfg, runtime, activeCount);
       opsUsed += 1;
     }
 
@@ -778,6 +887,8 @@ module.exports = {
   isSelectionOpen,
   canRobotsJoinLobby,
   syncAllActiveRobotsIntoSession,
+  scheduleRobotLobbyJoin,
+  isRobotLobbyJoinDue,
   readSessionWinPercent,
   hasEnabledRobotsInRound,
 };

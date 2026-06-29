@@ -45,7 +45,7 @@ function ensureRuntimeEntry(robot) {
     return existing;
   }
   const entry = robotBehavior.createRuntimeEntry(robot);
-  entry.nextJoinAt = now();
+  entry.nextJoinAt = null;
   runtime.set(id, entry);
   return entry;
 }
@@ -60,7 +60,9 @@ function refreshRuntimeFromRobots(robots) {
     const wasEnabled = rt.enabled;
     rt.enabled = onIds.has(rt.robotId);
     if (rt.enabled && !wasEnabled) {
-      rt.nextJoinAt = now();
+      rt.nextJoinAt = null;
+      rt._joinWhenRemainingSec = null;
+      rt._joinCountdownEndsAt = null;
       rt.nextLeaveAt = null;
     }
     if (!rt.enabled && rt.active) {
@@ -116,11 +118,11 @@ function robotEngineTick(io) {
       if (now() - (rt.lastEventAt || 0) > 2000 || !rt.currentRoundCartels?.length) {
         robotBehavior.syncCartelsFromSession(session, rt);
       }
-    } else if (rt.enabled) {
-      if (!rt.nextJoinAt || rt.nextJoinAt > now()) {
-        rt.nextJoinAt = now();
+    } else if (rt.enabled && !rt.active) {
+      if (rt._joinWhenRemainingSec == null || rt.nextJoinAt == null) {
+        robotBehavior.scheduleRobotLobbyJoin(rt, session);
       }
-    } else {
+    } else if (!rt.enabled) {
       rt.active = false;
       rt.currentRoundCartels = [];
       rt.paidForRound = false;
@@ -130,9 +132,7 @@ function robotEngineTick(io) {
   }
 
   if (session.status === 'waiting' && !session.stakesCharged) {
-    robotBehavior.syncAllActiveRobotsIntoSession(session, io, cfg, runtime, {
-      eager: true,
-    });
+    robotBehavior.syncAllActiveRobotsIntoSession(session, io, cfg, runtime);
   }
 
   if (session.status === 'calling' && session.stakesCharged && !lastStakesCharged) {

@@ -28,6 +28,7 @@ function ensureRobotsJoinBeforeRoundStart(io, session, runtime) {
   const robotBehavior = require('./robotBehaviorService');
   const joined = robotBehavior.syncAllActiveRobotsIntoSession(session, io, cfg, runtime, {
     eager: true,
+    forceBeforeRoundStart: true,
     reason: 'pre_round_start',
   });
 
