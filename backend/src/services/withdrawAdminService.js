@@ -293,6 +293,10 @@ async function approveWithdrawRequest(requestId) {
 
   await emitWithdrawRequestsUpdate();
 
+  void require('./financialSummaryService')
+    .broadcastFinancialSummaryUpdate()
+    .catch(() => {});
+
   return {
     ok: true,
     request: formatted,

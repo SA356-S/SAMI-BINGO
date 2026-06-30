@@ -78,6 +78,28 @@ export interface WithdrawRequestsResponse {
   stats: WithdrawRequestStats;
 }
 
+export interface FinancialPeriodStats {
+  depositTotal: number;
+  depositCount: number;
+  withdrawalTotal: number;
+  withdrawalCount: number;
+  netRevenue: number;
+}
+
+export type FinancialPeriodKey =
+  | 'last24h'
+  | 'today'
+  | 'last7days'
+  | 'thisMonth'
+  | 'lifetime';
+
+export interface FinancialSummary {
+  ok: boolean;
+  generatedAt: string;
+  currency: string;
+  periods: Record<FinancialPeriodKey, FinancialPeriodStats>;
+}
+
 export interface DailyProfitDayRow {
   date: string;
   totalGamesPlayed: number;

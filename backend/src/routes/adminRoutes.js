@@ -133,6 +133,16 @@ router.get('/daily-profit', requireManager, async (_req, res) => {
   }
 });
 
+router.get('/financial-summary', requireManager, async (_req, res) => {
+  try {
+    const { getFinancialSummary } = require('../services/financialSummaryService');
+    res.json(await getFinancialSummary());
+  } catch (err) {
+    console.error('[admin] financial-summary error', err);
+    res.status(500).json({ ok: false, error: 'financial_summary_failed' });
+  }
+});
+
 router.get('/game/state', requireManager, (req, res) => {
   const session = resolveSession(req.query.gameId);
   res.json({ ok: true, game: sessionSnapshot(session) });

@@ -16,6 +16,8 @@ import type {
   WithdrawRequestsResponse,
   WithdrawRequestStatus,
   DailyProfitSummary,
+  FinancialSummary,
+  FinancialPeriodKey,
 } from '../types';
 
 // Dev default uses Vite proxy (/api -> backend :3001). Override with VITE_API_URL for production.
@@ -142,6 +144,11 @@ export async function fetchDashboard() {
 
 export async function fetchDailyProfit() {
   const { data } = await api.get<DailyProfitSummary>('/admin/daily-profit');
+  return data;
+}
+
+export async function fetchFinancialSummary() {
+  const { data } = await api.get<FinancialSummary>('/admin/financial-summary');
   return data;
 }
 

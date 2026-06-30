@@ -165,6 +165,13 @@ function registerSocketHandlers(io) {
       } catch (err) {
         console.warn('[admin] daily profit snapshot on subscribe failed', err?.message);
       }
+      try {
+        const { getFinancialSummary } = require('./services/financialSummaryService');
+        const financialPayload = await getFinancialSummary();
+        socket.emit('admin:financialSummary', financialPayload);
+      } catch (err) {
+        console.warn('[admin] financial summary snapshot on subscribe failed', err?.message);
+      }
     });
 
     const userId = resolveUserId(socket);

@@ -902,6 +902,10 @@ async function verifyAndApproveDeposit({
     );
   }
 
+  void require('./financialSummaryService')
+    .broadcastFinancialSummaryUpdate()
+    .catch(() => {});
+
   return {
     ok: true,
     credited: creditAmount,

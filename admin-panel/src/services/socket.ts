@@ -7,6 +7,7 @@ import type {
   WithdrawRequestsResponse,
   DashboardResponse,
   DailyProfitSummary,
+  FinancialSummary,
 } from '../types';
 
 const SOCKET_URL =
@@ -31,6 +32,7 @@ const withdrawRequestsListeners = new Set<
 >();
 const dashboardListeners = new Set<(payload: DashboardResponse) => void>();
 const dailyProfitListeners = new Set<(payload: DailyProfitSummary) => void>();
+const financialSummaryListeners = new Set<(payload: FinancialSummary) => void>();
 
 function notifyGame(game: GameSnapshot) {
   gameListeners.forEach((fn) => fn(game));
@@ -62,6 +64,10 @@ function notifyDashboard(payload: DashboardResponse) {
 
 function notifyDailyProfit(payload: DailyProfitSummary) {
   dailyProfitListeners.forEach((fn) => fn(payload));
+}
+
+function notifyFinancialSummary(payload: FinancialSummary) {
+  financialSummaryListeners.forEach((fn) => fn(payload));
 }
 
 export function connectAdminSocket() {
@@ -129,6 +135,10 @@ export function connectAdminSocket() {
     if (payload?.ok !== false) notifyDailyProfit(payload);
   });
 
+  socket.on('admin:financialSummary', (payload: FinancialSummary) => {
+    if (payload?.ok !== false) notifyFinancialSummary(payload);
+  });
+
   return socket;
 }
 
@@ -180,4 +190,11 @@ export function subscribeDailyProfitUpdates(
 ) {
   dailyProfitListeners.add(listener);
   return () => dailyProfitListeners.delete(listener);
+}
+
+export function subscribeFinancialSummaryUpdates(
+  listener: (payload: FinancialSummary) => void
+) {
+  financialSummaryListeners.add(listener);
+  return () => financialSummaryListeners.delete(listener);
 }
