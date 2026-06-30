@@ -17,7 +17,6 @@ import type {
   WithdrawRequestStatus,
   DailyProfitSummary,
   FinancialSummary,
-  FinancialPeriodKey,
 } from '../types';
 
 // Dev default uses Vite proxy (/api -> backend :3001). Override with VITE_API_URL for production.
