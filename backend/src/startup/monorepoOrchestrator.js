@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const express = require('express');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 
@@ -45,11 +46,7 @@ function mountMonorepoStatic(app) {
 
   if (hasAdmin) {
     const adminIndex = path.join(adminDist, 'index.html');
-    const adminStatic = express.static(adminDist, {
-      index: false,
-      redirect: false,
-      fallthrough: true,
-    });
+    const adminStatic = expressStatic(adminDist, { redirect: false });
 
     app.use(ADMIN_PANEL_PATH, adminStatic);
 
@@ -90,9 +87,13 @@ function mountMonorepoStatic(app) {
   });
 }
 
-function expressStatic(rootDir) {
-  const express = require('express');
-  return express.static(rootDir, { index: false, fallthrough: true });
+function expressStatic(rootDir, options = {}) {
+  return express.static(rootDir, {
+    index: false,
+    fallthrough: true,
+    redirect: false,
+    ...options,
+  });
 }
 
 function startVerifierApiProcess() {
