@@ -69,7 +69,7 @@ try {
   tryRun('verifier-api build', 'npm run build -w verifier-api');
   run('frontend build', 'npm run build -w frontend');
   run('admin-panel build', 'npm run build -w admin-panel', {
-    VITE_BASE_PATH: process.env.VITE_BASE_PATH || '/admin/',
+    VITE_BASE_PATH: process.env.VITE_BASE_PATH || '/SHULKETE100/',
   });
 
   console.log('\n[build] monorepo production build complete');

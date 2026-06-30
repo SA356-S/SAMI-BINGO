@@ -4,6 +4,9 @@ const { spawn } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 
+/** Public URL path for the admin panel SPA (not the /api/admin API prefix). */
+const ADMIN_PANEL_PATH = '/SHULKETE100';
+
 /** @type {import('child_process').ChildProcess | null} */
 let verifierProcess = null;
 
@@ -33,12 +36,19 @@ function mountMonorepoStatic(app) {
   const hasFrontend = fs.existsSync(path.join(frontendDist, 'index.html'));
   const hasAdmin = fs.existsSync(path.join(adminDist, 'index.html'));
 
+  app.all(/^\/admin(\/.*)?$/i, (_req, res) => {
+    res.status(404).type('text').send('Not Found');
+  });
+
   if (hasAdmin) {
-    app.use('/admin', expressStatic(adminDist));
-    app.get(/^\/admin(\/.*)?$/, (_req, res) => {
+    app.get(ADMIN_PANEL_PATH, (_req, res) => {
+      res.redirect(301, `${ADMIN_PANEL_PATH}/`);
+    });
+    app.use(ADMIN_PANEL_PATH, expressStatic(adminDist));
+    app.get(new RegExp(`^${ADMIN_PANEL_PATH}(\\/.*)?$`), (_req, res) => {
       res.sendFile(path.join(adminDist, 'index.html'));
     });
-    console.log('[monorepo] admin-panel static → /admin');
+    console.log(`[monorepo] admin-panel static → ${ADMIN_PANEL_PATH}`);
   }
 
   if (hasFrontend) {
@@ -53,7 +63,7 @@ function mountMonorepoStatic(app) {
       req.path.startsWith('/bot') ||
       req.path.startsWith('/uploads') ||
       req.path.startsWith('/socket.io') ||
-      req.path.startsWith('/admin')
+      req.path.startsWith(ADMIN_PANEL_PATH)
     ) {
       return next();
     }
@@ -143,4 +153,5 @@ module.exports = {
   startTelegramBots,
   shutdownMonorepoServices,
   REPO_ROOT,
+  ADMIN_PANEL_PATH,
 };
