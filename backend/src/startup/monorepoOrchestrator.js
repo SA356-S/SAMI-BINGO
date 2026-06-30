@@ -36,18 +36,34 @@ function mountMonorepoStatic(app) {
   const hasFrontend = fs.existsSync(path.join(frontendDist, 'index.html'));
   const hasAdmin = fs.existsSync(path.join(adminDist, 'index.html'));
 
-  app.all(/^\/admin(\/.*)?$/i, (_req, res) => {
+  app.get(/^\/admin\/?$/, (_req, res) => {
+    res.redirect(301, ADMIN_PANEL_PATH);
+  });
+  app.all(/^\/admin\/.+/, (_req, res) => {
     res.status(404).type('text').send('Not Found');
   });
 
   if (hasAdmin) {
-    app.get(ADMIN_PANEL_PATH, (_req, res) => {
-      res.redirect(301, `${ADMIN_PANEL_PATH}/`);
+    const adminIndex = path.join(adminDist, 'index.html');
+    const adminStatic = express.static(adminDist, {
+      index: false,
+      redirect: false,
+      fallthrough: true,
     });
-    app.use(ADMIN_PANEL_PATH, expressStatic(adminDist));
-    app.get(new RegExp(`^${ADMIN_PANEL_PATH}(\\/.*)?$`), (_req, res) => {
-      res.sendFile(path.join(adminDist, 'index.html'));
-    });
+
+    app.use(ADMIN_PANEL_PATH, adminStatic);
+
+    const serveAdminSpa = (req, res, next) => {
+      const suffix = req.path.slice(ADMIN_PANEL_PATH.length);
+      const firstSegment = suffix.split('/').filter(Boolean)[0] || '';
+      if (firstSegment && path.extname(firstSegment)) {
+        return next();
+      }
+      return res.sendFile(adminIndex);
+    };
+
+    app.get(ADMIN_PANEL_PATH, serveAdminSpa);
+    app.get(`${ADMIN_PANEL_PATH}/*`, serveAdminSpa);
     console.log(`[monorepo] admin-panel static → ${ADMIN_PANEL_PATH}`);
   }
 
