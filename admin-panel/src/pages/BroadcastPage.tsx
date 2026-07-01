@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import PanelCard from '../components/PanelCard';
 import {
   broadcastNotification,
+  ensureAdminApiReady,
   getApiErrorMessage,
   uploadBroadcastImage,
 } from '../services/api';
@@ -56,6 +57,10 @@ export default function BroadcastPage() {
   const busy = uploading || sending;
 
   const previewSrc = useMemo(() => imagePreview || imageUrl || '', [imagePreview, imageUrl]);
+
+  useEffect(() => {
+    void ensureAdminApiReady();
+  }, []);
 
   const onPickImage = async (file: File | null) => {
     if (!file) return;

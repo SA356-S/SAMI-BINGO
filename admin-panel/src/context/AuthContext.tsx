@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { login as apiLogin } from '../services/api';
+import { login as apiLogin, resetAdminApiReady } from '../services/api';
 import {
   clearAdminToken,
   getAdminRole,
@@ -42,12 +42,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAdminSession(res.token, res.telegramId ?? telegramId, res.role);
     setRole(res.role);
     setAuthed(true);
+    resetAdminApiReady();
     connectAdminSocket();
   }, []);
 
   const logout = useCallback(() => {
     clearAdminToken();
     disconnectAdminSocket();
+    resetAdminApiReady();
     setAuthed(false);
     setRole(null);
   }, []);

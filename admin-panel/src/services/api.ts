@@ -84,6 +84,39 @@ export {
   getNetworkErrorMessage,
 } from './connection';
 
+/** Broadcast sends to every Telegram user server-side before responding — allow longer than default API timeout. */
+const BROADCAST_REQUEST_TIMEOUT_MS = 120_000;
+
+let adminApiReadyPromise: Promise<void> | null = null;
+
+/**
+ * Warm the authenticated admin HTTP path before the first notifications request.
+ * Broadcast is the only admin page that skips mount-time API calls, so an immediate
+ * send can be the first POST and hit a transient connection failure (no response body).
+ */
+export function resetAdminApiReady() {
+  adminApiReadyPromise = null;
+}
+
+export function ensureAdminApiReady(): Promise<void> {
+  if (!getAdminToken()) {
+    return Promise.resolve();
+  }
+
+  if (!adminApiReadyPromise) {
+    adminApiReadyPromise = fetchWithStartupRetry(() =>
+      api.get('/admin/dashboard', { timeout: 8000 })
+    )
+      .then(() => undefined)
+      .catch((error) => {
+        adminApiReadyPromise = null;
+        throw error;
+      });
+  }
+
+  return adminApiReadyPromise;
+}
+
 export async function login(password: string, telegramId: string) {
   const { data } = await api.post<{
     ok: boolean;
@@ -204,12 +237,17 @@ export async function fetchRobotAdvantageSettings() {
 }
 
 export async function uploadBroadcastImage(imageBase64: string, mimeType?: string) {
+  await ensureAdminApiReady();
   const { data } = await api.post<{
     ok: boolean;
     imageUrl?: string;
     error?: string;
     message?: string;
-  }>('/notifications/upload-image', { imageBase64, mimeType });
+  }>(
+    '/notifications/upload-image',
+    { imageBase64, mimeType },
+    { timeout: BROADCAST_REQUEST_TIMEOUT_MS }
+  );
   return data;
 }
 
@@ -219,6 +257,7 @@ export async function broadcastNotification(payload: {
   buttonText?: string;
   buttonLink?: string;
 }) {
+  await ensureAdminApiReady();
   const { data } = await api.post<{
     ok: boolean;
     channel?: string;
@@ -228,7 +267,9 @@ export async function broadcastNotification(payload: {
     failedChatIds?: { chatId: number; error?: string; message?: string }[];
     error?: string;
     message?: string;
-  }>('/notifications/broadcast', payload);
+  }>('/notifications/broadcast', payload, {
+    timeout: BROADCAST_REQUEST_TIMEOUT_MS,
+  });
   return data;
 }
 
