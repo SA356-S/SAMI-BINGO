@@ -1,5 +1,9 @@
 import axios from 'axios';
 import { getAdminToken, getAdminTelegramId } from './auth';
+import {
+  fetchWithStartupRetry,
+  getNetworkErrorMessage,
+} from './connection';
 import type {
   DashboardResponse,
   GameSnapshot,
@@ -19,7 +23,7 @@ import type {
   FinancialSummary,
 } from '../types';
 
-// Dev default uses Vite proxy (/api -> backend :3001). Override with VITE_API_URL for production.
+// Dev: Vite proxy (/api -> backend). Production: same-origin /api unless VITE_API_URL is set.
 const API_BASE =
   import.meta.env.VITE_API_URL?.replace(/\/$/, '') || '/api';
 
@@ -45,7 +49,7 @@ api.interceptors.request.use((config) => {
 export function getApiErrorMessage(error: unknown, fallback: string) {
   if (axios.isAxiosError(error)) {
     if (!error.response) {
-      return 'Cannot reach backend. Run `npm run backend` on port 3001, then refresh.';
+      return getNetworkErrorMessage();
     }
     const data = error.response.data as { message?: string; error?: string } | undefined;
     if (data?.message) return data.message;
@@ -63,13 +67,22 @@ export function getApiErrorMessage(error: unknown, fallback: string) {
 export async function fetchBackendHealth() {
   const base = API_BASE.replace(/\/api\/?$/, '') || '';
   const url = `${base}/health`;
-  const { data } = await axios.get<{
-    ok: boolean;
-    service: string;
-    activeSessions?: number;
-  }>(url, { timeout: 8000 });
-  return data;
+  return fetchWithStartupRetry(async () => {
+    const { data } = await axios.get<{
+      ok: boolean;
+      service: string;
+      activeSessions?: number;
+    }>(url, { timeout: 8000 });
+    return data;
+  });
 }
+
+export { fetchWithStartupRetry } from './connection';
+export {
+  CONNECTING_MESSAGE,
+  CONNECTION_GRACE_MS,
+  getNetworkErrorMessage,
+} from './connection';
 
 export async function login(password: string, telegramId: string) {
   const { data } = await api.post<{

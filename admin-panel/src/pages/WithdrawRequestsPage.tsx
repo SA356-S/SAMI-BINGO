@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import PanelCard from '../components/PanelCard';
 import type { WithdrawRequestRow, WithdrawRequestsResponse } from '../types';
 import {
   approveWithdrawRequest,
+  CONNECTING_MESSAGE,
   fetchWithdrawRequests,
+  fetchWithStartupRetry,
   getApiErrorMessage,
   rejectWithdrawRequest,
 } from '../services/api';
@@ -144,6 +146,7 @@ export default function WithdrawRequestsPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const initialLoadRef = useRef(true);
 
   const applyPayload = useCallback((payload: WithdrawRequestsResponse) => {
     setRequests(payload.requests ?? []);
@@ -151,13 +154,15 @@ export default function WithdrawRequestsPage() {
   }, []);
 
   const loadRequests = useCallback(
-    async (status: StatusFilter) => {
+    async (status: StatusFilter, useStartupRetry = false) => {
       setLoading(true);
       setError('');
       try {
-        const data = await fetchWithdrawRequests(
-          status === 'all' ? undefined : status
-        );
+        const fetchFn = () =>
+          fetchWithdrawRequests(status === 'all' ? undefined : status);
+        const data = useStartupRetry
+          ? await fetchWithStartupRetry(fetchFn)
+          : await fetchFn();
         applyPayload(data);
       } catch (err) {
         console.error('[admin] withdraw requests fetch failed', err);
@@ -171,8 +176,10 @@ export default function WithdrawRequestsPage() {
 
   useEffect(() => {
     let cancelled = false;
+    const useStartupRetry = initialLoadRef.current;
+    initialLoadRef.current = false;
 
-    loadRequests(filter).then(() => {
+    loadRequests(filter, useStartupRetry).then(() => {
       if (cancelled) return;
     });
 
@@ -180,6 +187,7 @@ export default function WithdrawRequestsPage() {
       if (cancelled) return;
       applyPayload(payload);
       setLoading(false);
+      setError('');
     });
 
     return () => {
@@ -259,7 +267,7 @@ export default function WithdrawRequestsPage() {
         ) : null}
 
         {loading ? (
-          <p className="text-sm text-slate-400">Loading withdraw requests…</p>
+          <p className="text-sm text-slate-400">{CONNECTING_MESSAGE}</p>
         ) : visibleRequests.length === 0 ? (
           <p className="text-sm text-slate-400">
             No {filter === 'all' ? '' : `${filter} `}withdraw requests yet.

@@ -5,9 +5,11 @@ import UserBalanceCard from '../components/UserBalanceCard';
 import type { AdminUserRow } from '../types';
 import {
   addUserBalance,
+  CONNECTING_MESSAGE,
   fetchBackendHealth,
   fetchRecentUsers,
   getApiErrorMessage,
+  getNetworkErrorMessage,
   searchUser,
 } from '../services/api';
 import { getAdminToken } from '../services/auth';
@@ -139,9 +141,7 @@ export default function UserBalancePage() {
     <div className="space-y-4">
       {backendStatus === 'offline' ? (
         <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-          Backend is not reachable. Start it with{' '}
-          <code className="rounded bg-black/30 px-1">npm run backend</code> (port
-          3001), then refresh this page.
+          {getNetworkErrorMessage()}
         </div>
       ) : null}
 
@@ -160,7 +160,7 @@ export default function UserBalancePage() {
             ].join(' ')}
           >
             {backendStatus === 'checking'
-              ? 'Connecting…'
+              ? CONNECTING_MESSAGE
               : backendStatus === 'online'
                 ? 'Backend online'
                 : 'Backend offline'}
