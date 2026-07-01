@@ -9,6 +9,9 @@ const MSG_NO_BALANCE =
 const MSG_MIN_REMAINING =
   'ይቅርታ ጥያቄዎን ማስተናገድ አልተቻለም።\nቀሪ ሂሳብ ከ 10 ብር ያነሰ ሊሆን አይችልም።';
 
+const MSG_PENDING_WITHDRAW =
+  'You already have a pending withdrawal request. Please wait for admin approval.';
+
 /** @type {object[]} */
 const memoryRequests = [];
 
@@ -63,6 +66,35 @@ function validateWithdrawAmount(mainBalance, amount) {
   };
 }
 
+function isDuplicateKeyError(err) {
+  return err?.code === 11000 || /duplicate key/i.test(String(err?.message || ''));
+}
+
+async function findPendingWithdrawRequest(userId) {
+  const key = String(userId);
+  if (isDbReady()) {
+    return WithdrawRequestModel.findOne({ userId: key, status: 'pending' })
+      .select('_id amount createdAt')
+      .lean();
+  }
+  return (
+    memoryRequests.find((row) => row.userId === key && row.status === 'pending') ||
+    null
+  );
+}
+
+async function assertNoPendingWithdrawRequest(userId) {
+  const pending = await findPendingWithdrawRequest(userId);
+  if (pending) {
+    return {
+      ok: false,
+      error: 'pending_request',
+      message: MSG_PENDING_WITHDRAW,
+    };
+  }
+  return { ok: true };
+}
+
 async function createWithdrawRequest({
   userId,
   amount,
@@ -88,24 +120,43 @@ async function createWithdrawRequest({
   };
 
   if (isDbReady()) {
-    const doc = await WithdrawRequestModel.create(row);
-    const request = doc.toObject();
     try {
-      const { emitWithdrawRequestsUpdate } = require('./withdrawAdminService');
-      void emitWithdrawRequestsUpdate();
-    } catch (err) {
-      console.warn('[withdraw] admin broadcast failed', err?.message || err);
-    }
-    try {
-      const { notifyWithdrawRequestCreated } = require('./withdrawRequestNotifyService');
-      const notifyResult = await notifyWithdrawRequestCreated(request);
-      if (!notifyResult?.ok) {
-        console.warn('[withdraw] telegram notify result', notifyResult);
+      const doc = await WithdrawRequestModel.create(row);
+      const request = doc.toObject();
+      try {
+        const { emitWithdrawRequestsUpdate } = require('./withdrawAdminService');
+        void emitWithdrawRequestsUpdate();
+      } catch (err) {
+        console.warn('[withdraw] admin broadcast failed', err?.message || err);
       }
+      try {
+        const { notifyWithdrawRequestCreated } = require('./withdrawRequestNotifyService');
+        const notifyResult = await notifyWithdrawRequestCreated(request);
+        if (!notifyResult?.ok) {
+          console.warn('[withdraw] telegram notify result', notifyResult);
+        }
+      } catch (err) {
+        console.warn('[withdraw] telegram notify failed', err?.message || err);
+      }
+      return { ok: true, request };
     } catch (err) {
-      console.warn('[withdraw] telegram notify failed', err?.message || err);
+      if (isDuplicateKeyError(err)) {
+        return {
+          ok: false,
+          error: 'pending_request',
+          message: MSG_PENDING_WITHDRAW,
+        };
+      }
+      throw err;
     }
-    return { ok: true, request };
+  }
+
+  if (memoryRequests.some((row) => row.userId === key && row.status === 'pending')) {
+    return {
+      ok: false,
+      error: 'pending_request',
+      message: MSG_PENDING_WITHDRAW,
+    };
   }
 
   const mem = { ...row, _id: `mem-wd-${Date.now()}` };
@@ -148,11 +199,20 @@ async function submitWithdrawRequest(payload) {
     return validation;
   }
 
+  const pendingCheck = await assertNoPendingWithdrawRequest(payload.userId);
+  if (!pendingCheck.ok) {
+    return pendingCheck;
+  }
+
   const result = await createWithdrawRequest({
     ...payload,
     amount: validation.amount,
     mainWalletAtRequest: mainBalance,
   });
+
+  if (!result.ok) {
+    return result;
+  }
 
   return {
     ok: true,
@@ -165,8 +225,11 @@ module.exports = {
   MIN_REMAINING_MAIN,
   MSG_NO_BALANCE,
   MSG_MIN_REMAINING,
+  MSG_PENDING_WITHDRAW,
   getMainWalletBalance,
   validateWithdrawAmount,
+  findPendingWithdrawRequest,
+  assertNoPendingWithdrawRequest,
   submitWithdrawRequest,
   formatAdminWithdrawNotice,
 };

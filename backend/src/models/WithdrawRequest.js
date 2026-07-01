@@ -20,6 +20,15 @@ const withdrawRequestSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+withdrawRequestSchema.index(
+  { userId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: 'pending' },
+    name: 'one_pending_withdraw_per_user',
+  }
+);
+
 const WithdrawRequestModel =
   mongoose.models.WithdrawRequest ||
   mongoose.model('WithdrawRequest', withdrawRequestSchema);

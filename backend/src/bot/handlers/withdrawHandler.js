@@ -2,8 +2,10 @@ const { Markup } = require('telegraf');
 const {
   MSG_NO_BALANCE,
   MSG_MIN_REMAINING,
+  MSG_PENDING_WITHDRAW,
   getMainWalletBalance,
   validateWithdrawAmount,
+  assertNoPendingWithdrawRequest,
   submitWithdrawRequest,
 } = require('../../services/botWithdrawService');
 
@@ -85,6 +87,12 @@ async function beginWithdraw(ctx) {
   pruneExpiredStates();
   clearOtherFlowState(userId);
   clearWithdrawState(userId);
+
+  const pendingCheck = await assertNoPendingWithdrawRequest(userId);
+  if (!pendingCheck.ok) {
+    await ctx.reply(pendingCheck.message || MSG_PENDING_WITHDRAW);
+    return;
+  }
 
   const mainBalance = await getMainWalletBalance(userId);
   if (mainBalance <= 0) {

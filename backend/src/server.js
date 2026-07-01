@@ -135,6 +135,12 @@ gameManager.startLobbyCountdownClock(io);
 
 async function start() {
   await connectDatabase();
+  try {
+    const { WithdrawRequestModel } = require('./models/WithdrawRequest');
+    await WithdrawRequestModel.syncIndexes();
+  } catch (err) {
+    console.warn('[db] WithdrawRequest index sync failed:', err?.message || err);
+  }
   await hydrateWalletCacheFromDb();
   await robotConfigService.getConfig();
   await settingsService.getSettings();
