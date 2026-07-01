@@ -10,8 +10,25 @@ import type {
   FinancialSummary,
 } from '../types';
 
-const SOCKET_URL =
-  import.meta.env.VITE_SOCKET_URL?.replace(/\/$/, '') || '';
+const LOCALHOST_PATTERN = /localhost|127\.0\.0\.1/i;
+
+function resolveSocketUrl() {
+  const configured = import.meta.env.VITE_SOCKET_URL?.trim().replace(/\/$/, '');
+  if (import.meta.env.PROD) {
+    if (configured && LOCALHOST_PATTERN.test(configured)) {
+      console.error(
+        '[admin-socket] blocked localhost VITE_SOCKET_URL in production — using same-origin',
+        configured
+      );
+      return window.location.origin;
+    }
+    if (configured) return configured;
+    return window.location.origin;
+  }
+  return configured || window.location.origin;
+}
+
+const SOCKET_URL = resolveSocketUrl();
 
 type GameListener = (game: GameSnapshot) => void;
 type NumberListener = (payload: {
@@ -79,7 +96,7 @@ export function connectAdminSocket() {
     return socket;
   }
 
-  socket = io(SOCKET_URL || window.location.origin, {
+  socket = io(SOCKET_URL, {
     path: '/socket.io',
     transports: ['websocket', 'polling'],
     auth: { adminToken: token, token },

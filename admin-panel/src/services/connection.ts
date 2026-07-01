@@ -67,14 +67,14 @@ export function warnProductionMisconfig() {
   const socketUrl = import.meta.env.VITE_SOCKET_URL?.trim();
 
   if (apiUrl && /localhost|127\.0\.0\.1/i.test(apiUrl)) {
-    console.warn(
-      '[admin] VITE_API_URL points to localhost in a production build:',
+    console.error(
+      '[admin] VITE_API_URL points to localhost in production — runtime uses same-origin /api instead',
       apiUrl
     );
   }
   if (socketUrl && /localhost|127\.0\.0\.1/i.test(socketUrl)) {
-    console.warn(
-      '[admin] VITE_SOCKET_URL points to localhost in a production build:',
+    console.error(
+      '[admin] VITE_SOCKET_URL points to localhost in production — runtime uses same-origin instead',
       socketUrl
     );
   }

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import PanelCard from '../components/PanelCard';
+import { useAdminReady } from '../hooks/useAdminReady';
 import {
   broadcastNotification,
-  ensureAdminApiReady,
   getApiErrorMessage,
   uploadBroadcastImage,
 } from '../services/api';
@@ -44,6 +44,7 @@ function fileToDataUrl(file: File): Promise<string> {
 
 export default function BroadcastPage() {
   const fileRef = useRef<HTMLInputElement>(null);
+  const { authReady, apiReady } = useAdminReady();
   const [message, setMessage] = useState('');
   const [buttonText, setButtonText] = useState('Play');
   const [buttonLink, setButtonLink] = useState('/card-selection');
@@ -54,16 +55,14 @@ export default function BroadcastPage() {
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
 
+  const actionsReady = authReady && apiReady;
   const busy = uploading || sending;
+  const controlsDisabled = busy || !actionsReady;
 
   const previewSrc = useMemo(() => imagePreview || imageUrl || '', [imagePreview, imageUrl]);
 
-  useEffect(() => {
-    void ensureAdminApiReady();
-  }, []);
-
   const onPickImage = async (file: File | null) => {
-    if (!file) return;
+    if (!file || !actionsReady) return;
     setError('');
     setStatus('');
     setUploading(true);
@@ -86,7 +85,7 @@ export default function BroadcastPage() {
 
   const onSend = async () => {
     const text = message.trim();
-    if (!text || busy) return;
+    if (!text || busy || !actionsReady) return;
     setError('');
     setStatus('');
     setSending(true);
@@ -134,7 +133,7 @@ export default function BroadcastPage() {
               type="file"
               accept="image/png,image/jpeg,image/webp,image/gif"
               className="mt-2 block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-500/20 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-200"
-              disabled={busy}
+              disabled={controlsDisabled}
               onChange={(e) => onPickImage(e.target.files?.[0] ?? null)}
             />
             {previewSrc ? (
@@ -149,6 +148,7 @@ export default function BroadcastPage() {
                     type="button"
                     onClick={onClearImage}
                     className="text-xs font-semibold text-rose-300 hover:text-rose-200"
+                    disabled={controlsDisabled}
                   >
                     Remove image
                   </button>
@@ -167,7 +167,7 @@ export default function BroadcastPage() {
               onChange={(e) => setMessage(e.target.value)}
               placeholder="Type your announcement…"
               maxLength={2000}
-              disabled={busy}
+              disabled={controlsDisabled}
             />
           </label>
 
@@ -180,7 +180,7 @@ export default function BroadcastPage() {
                 className="mt-2 w-full bg-transparent text-sm font-bold text-white outline-none"
                 value={buttonText}
                 onChange={(e) => setButtonText(e.target.value)}
-                disabled={busy}
+                disabled={controlsDisabled}
               />
             </label>
             <label className="rounded-xl border border-white/10 bg-white/5 p-3">
@@ -192,7 +192,7 @@ export default function BroadcastPage() {
                 value={buttonLink}
                 onChange={(e) => setButtonLink(e.target.value)}
                 placeholder="/card-selection"
-                disabled={busy}
+                disabled={controlsDisabled}
               />
             </label>
           </div>
@@ -215,10 +215,12 @@ export default function BroadcastPage() {
                 ? 'Sending…'
                 : uploading
                   ? 'Uploading image…'
-                  : 'Send broadcast'
+                  : actionsReady
+                    ? 'Send broadcast'
+                    : 'Preparing…'
             }
             onClick={onSend}
-            disabled={busy || !message.trim()}
+            disabled={controlsDisabled || !message.trim()}
           />
         </div>
       </PanelCard>

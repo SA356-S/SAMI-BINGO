@@ -2,11 +2,12 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from 'react';
-import { login as apiLogin, resetAdminApiReady } from '../services/api';
+import { login as apiLogin, initializeAdminClient, resetAdminClient } from '../services/api';
 import {
   clearAdminToken,
   getAdminRole,
@@ -42,14 +43,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAdminSession(res.token, res.telegramId ?? telegramId, res.role);
     setRole(res.role);
     setAuthed(true);
-    resetAdminApiReady();
+    resetAdminClient();
+    await initializeAdminClient();
     connectAdminSocket();
   }, []);
 
   const logout = useCallback(() => {
     clearAdminToken();
     disconnectAdminSocket();
-    resetAdminApiReady();
+    resetAdminClient();
     setAuthed(false);
     setRole(null);
   }, []);
@@ -76,5 +78,9 @@ export function useAuth() {
 }
 
 export function useAuthBootstrap() {
-  if (getAdminToken()) connectAdminSocket();
+  useEffect(() => {
+    if (!getAdminToken()) return;
+    connectAdminSocket();
+    void initializeAdminClient();
+  }, []);
 }
