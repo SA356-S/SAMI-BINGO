@@ -23,6 +23,8 @@ const settingsService = require('./settingsService');
 const ROBOT_LOBBY_JOIN_DELAY_AFTER_COUNTDOWN_START_SEC = 7;
 /** Per-robot spread so selections do not happen at the same instant (45s → 38–34s left). */
 const ROBOT_LOBBY_JOIN_TIMING_SPREAD_SEC = 4;
+/** Lock robot cartela join/leave/reselect when countdown has this many seconds or fewer left. */
+const ROBOT_LOBBY_CARTELA_FREEZE_REMAINING_SEC = 10;
 
 function now() {
   return Date.now();
@@ -42,6 +44,16 @@ function canRobotsJoinLobby(session) {
     session &&
       session.status === 'waiting' &&
       !session.stakesCharged
+  );
+}
+
+/** True during the final lobby seconds — robots keep cartelas; no join/leave/reselect. */
+function isRobotLobbyCartelaSelectionFrozen(session, options = {}) {
+  if (options.forceBeforeRoundStart === true) return false;
+  if (!canRobotsJoinLobby(session)) return false;
+  if (typeof session.getLobbyCountdownRemaining !== 'function') return false;
+  return (
+    session.getLobbyCountdownRemaining() <= ROBOT_LOBBY_CARTELA_FREEZE_REMAINING_SEC
   );
 }
 
@@ -112,6 +124,7 @@ function scheduleRobotLobbyJoin(rt, session) {
 
 function isRobotLobbyJoinDue(session, rt, options = {}) {
   if (options.forceBeforeRoundStart === true) return true;
+  if (isRobotLobbyCartelaSelectionFrozen(session, options)) return false;
   if (!canRobotsJoinLobby(session)) return false;
   if (
     session.lobbyPhase &&
@@ -278,6 +291,7 @@ function tryJoin(session, io, rt, cfg, runtime, activeCountFn, options = {}) {
   }
 
   if (rt.active && rt.currentRoundCartels?.length) return true;
+  if (isRobotLobbyCartelaSelectionFrozen(session, options)) return false;
   if (!isRobotLobbyJoinDue(session, rt, options)) {
     scheduleRobotLobbyJoin(rt, session);
     return false;
@@ -358,6 +372,7 @@ function tryJoin(session, io, rt, cfg, runtime, activeCountFn, options = {}) {
 
 function tryLeave(session, io, rt, cfg) {
   if (!canRobotsJoinLobby(session)) return;
+  if (isRobotLobbyCartelaSelectionFrozen(session)) return;
 
   if (!rt.enabled) {
     if (!rt.active) return;
@@ -416,6 +431,7 @@ function tryLeave(session, io, rt, cfg) {
 
 function maybeAssignCartelsForActiveButEmpty(session, io, rt, cfg) {
   if (!canRobotsJoinLobby(session)) return;
+  if (isRobotLobbyCartelaSelectionFrozen(session)) return;
   if (!rt.enabled) return;
   if (cfg.enabledGlobal !== true) return;
   if ((rt.currentRoundCartels || []).length > 0) return;

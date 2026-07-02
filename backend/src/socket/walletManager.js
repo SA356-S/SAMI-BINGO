@@ -560,8 +560,17 @@ function chargeAndStartSession(session, io, options = {}) {
   const lobby = gameManager.getLobbySession();
   const target = lobby ?? session;
 
+  const cartelaDiag =
+    typeof target._lobbyCartelaDiag === 'function'
+      ? target._lobbyCartelaDiag()
+      : {
+          gameId: target.gameId,
+          status: target.status,
+          totalCartelas: target.takenCartels?.size ?? 0,
+        };
+
   if (target.status === 'calling' && target.drawTimer) {
-    return {
+    const result = {
       ok: true,
       alreadyRunning: true,
       alreadyCharged: target.stakesCharged,
@@ -570,6 +579,12 @@ function chargeAndStartSession(session, io, options = {}) {
       prizePool: target.prizePool,
       gameId: target.gameId,
     };
+    console.info('[lobby-diag] chargeAndStartSession RETURN', {
+      path: 'already_calling_with_draw_timer',
+      result,
+      ...cartelaDiag,
+    });
+    return result;
   }
 
   const forceStart = options.forceStart === true;
@@ -582,17 +597,40 @@ function chargeAndStartSession(session, io, options = {}) {
   const canStart = forceStart ? hasReadyCartels : target.canStartCalling();
 
   if (!canStart) {
-    return { ok: false, error: 'Cannot start game yet' };
+    const result = { ok: false, error: 'Cannot start game yet' };
+    console.info('[lobby-diag] chargeAndStartSession RETURN', {
+      path: 'cannot_start_yet',
+      forceStart,
+      hasReadyCartels,
+      canStartCalling:
+        typeof target.canStartCalling === 'function' ? target.canStartCalling() : null,
+      result,
+      ...cartelaDiag,
+    });
+    return result;
   }
 
   const charge = chargeSessionEntryStakes(target, io);
   if (!charge.ok) {
+    console.info('[lobby-diag] chargeAndStartSession RETURN', {
+      path: 'charge_session_entry_stakes_failed',
+      charge,
+      ...cartelaDiag,
+    });
     return charge;
   }
 
   const started = target.startCalling(io, options);
   if (!started?.ok) {
-    return { ok: false, error: started?.error ?? 'Failed to start ball caller' };
+    const result = { ok: false, error: started?.error ?? 'Failed to start ball caller' };
+    console.info('[lobby-diag] chargeAndStartSession RETURN', {
+      path: 'start_calling_failed',
+      started,
+      chargeOk: charge.ok,
+      result,
+      ...cartelaDiag,
+    });
+    return result;
   }
 
   // Prevent duplicate pool updates if multiple clients triggered "start" concurrently.
@@ -606,12 +644,23 @@ function chargeAndStartSession(session, io, options = {}) {
     });
   }
 
-  return {
+  const result = {
     ok: true,
     ...charge,
     gameId: target.gameId,
     alreadyRunning: started?.alreadyRunning,
   };
+  console.info('[lobby-diag] chargeAndStartSession RETURN', {
+    path: 'success',
+    result: {
+      ok: result.ok,
+      gameId: result.gameId,
+      alreadyRunning: result.alreadyRunning,
+      totalPool: result.totalPool,
+    },
+    ...cartelaDiag,
+  });
+  return result;
 }
 
 function emitWalletSnapshot(socket, wallet) {

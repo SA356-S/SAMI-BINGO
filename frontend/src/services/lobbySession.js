@@ -70,10 +70,27 @@ function releaseMainGameAutoEntryIfIdle() {
 }
 
 function maybeNavigateToMainGame() {
-  if (!navigateRef || gameStartNavigateDone) return;
-  if (!canAutoNavigateToMainGame()) return;
-  if (!isLobbyGameStarted(state)) return;
+  if (!navigateRef) {
+    logLobbyDiag('maybeNavigateToMainGame BLOCKED', { reason: 'no_navigate_ref' });
+    return;
+  }
+  if (gameStartNavigateDone) {
+    logLobbyDiag('maybeNavigateToMainGame BLOCKED', { reason: 'game_start_navigate_done' });
+    return;
+  }
+  if (!canAutoNavigateToMainGame()) {
+    logLobbyDiag('maybeNavigateToMainGame BLOCKED', {
+      reason: 'can_auto_navigate_false',
+      blockAutoEntry: isMainGameAutoEntryBlocked(),
+    });
+    return;
+  }
+  if (!isLobbyGameStarted(state)) {
+    logLobbyDiag('maybeNavigateToMainGame BLOCKED', { reason: 'lobby_not_game_started' });
+    return;
+  }
 
+  logLobbyDiag('maybeNavigateToMainGame NAVIGATING', { to: '/main-game' });
   gameStartNavigateDone = true;
   void unlockGameAudio();
   navigateRef('/main-game', {
@@ -90,6 +107,22 @@ function maybeNavigateToMainGame() {
 function logCountdown(event, detail = {}) {
   console.log('[countdown]', event, {
     remaining: getCountdownRemaining(),
+    ...detail,
+  });
+}
+
+function logLobbyDiag(event, detail = {}) {
+  console.info('[lobby-diag-client]', event, {
+    gameId: state.gameId,
+    lobbyPhase: state.lobbyPhase,
+    gameStatus: state.gameStatus,
+    gameInProgress: state.gameInProgress,
+    selectionLocked: state.selectionLocked,
+    countdownRemaining: getCountdownRemaining(),
+    selectedCartels: [...state.selectedCartels],
+    blockAutoEntry: isMainGameAutoEntryBlocked(),
+    canAutoNavigate: canAutoNavigateToMainGame(),
+    gameStartNavigateDone,
     ...detail,
   });
 }
@@ -416,7 +449,21 @@ export function applyLobbyPayload(
 
   state.gameStatus = normalizeGameStatus(payload);
 
+  const serverSaysGameStarted = isLobbyGameStarted({
+    gameInProgress: payload.gameInProgress,
+    lobbyPhase: payload.lobbyPhase ?? payload.phase,
+    gameStatus: payload.gameStatus ?? payload.status,
+  });
+
   if (isMainGameAutoEntryBlocked() && isLobbyGameStarted(state)) {
+    logLobbyDiag('blockAutoEntry SUPPRESSED game-started client state', {
+      serverSaysGameStarted,
+      payloadStatus: payload.status,
+      payloadLobbyPhase: payload.lobbyPhase ?? payload.phase,
+      payloadGameInProgress: payload.gameInProgress,
+      beforeGameInProgress: state.gameInProgress,
+      beforeLobbyPhase: state.lobbyPhase,
+    });
     state.gameInProgress = false;
     state.gameStatus = 'WAITING';
     state.selectionLocked = false;
@@ -429,6 +476,12 @@ export function applyLobbyPayload(
 
   if (isLobbyGameStarted(state)) {
     maybeNavigateToMainGame();
+  } else if (serverSaysGameStarted && isMainGameAutoEntryBlocked()) {
+    logLobbyDiag('blockAutoEntry prevented navigation despite server game start', {
+      serverSaysGameStarted,
+      payloadGameId: payload.gameId,
+      payloadStatus: payload.status,
+    });
   }
 }
 
@@ -649,6 +702,7 @@ function onLocalCountdownTick() {
   ) {
     state.countdownExpiredSignaled = true;
     logCountdown('reached-zero');
+    logLobbyDiag('client countdown reached zero — emitting game:lobby-sync', {});
 
     const socket = getSocket();
     const userId = activeUserId();
@@ -695,6 +749,13 @@ function registerLobbySocketHandlers() {
   };
 
   const onGameStart = (payload) => {
+    logLobbyDiag('socket game:started received', {
+      payloadGameId: payload?.gameId,
+      payloadStatus: payload?.status,
+      payloadLobbyPhase: payload?.lobbyPhase ?? payload?.phase,
+      payloadGameInProgress: payload?.gameInProgress,
+      blockAutoEntry: isMainGameAutoEntryBlocked(),
+    });
     applyLobbyPayload(payload, { mergeCartels: true, mergeTaken: true });
     logCountdown('game-start-state-only', { gameId: state.gameId });
   };

@@ -155,9 +155,29 @@ class GameSession {
   }
 
   /** Restart the 45 → 0 cycle without affecting cartel selections. */
-  restartLobbyCountdownLoop() {
-    if (this.status !== 'waiting') return;
-    this.armLobbyCountdown(settingsService.getCardSelectionTimeSync());
+  restartLobbyCountdownLoop(diagReason = 'unspecified') {
+    const snapshot = this._lobbyCartelaDiag();
+    if (this.status !== 'waiting') {
+      console.info('[lobby-diag] restartLobbyCountdownLoop SKIPPED', {
+        diagReason,
+        skipBecause: 'status_not_waiting',
+        ...snapshot,
+      });
+      return;
+    }
+    const durationSec = settingsService.getCardSelectionTimeSync();
+    console.info('[lobby-diag] restartLobbyCountdownLoop ARM', {
+      diagReason,
+      durationSec,
+      ...snapshot,
+    });
+    this.armLobbyCountdown(durationSec);
+    console.info('[lobby-diag] restartLobbyCountdownLoop DONE', {
+      diagReason,
+      newCountdownEndsAt: this.lobbyCountdownEndsAt,
+      newCountdownRemaining: this.getLobbyCountdownRemaining(),
+      ...this._lobbyCartelaDiag(),
+    });
   }
 
   /** Total cartelas selected in the lobby (robots + users combined). */
@@ -193,6 +213,23 @@ class GameSession {
       total += player.cartelIds?.length ?? 0;
     }
     return total;
+  }
+
+  /** TEMP diagnostic snapshot — lobby countdown / start path (remove after RCA). */
+  _lobbyCartelaDiag() {
+    return {
+      gameId: this.gameId,
+      status: this.status,
+      lobbyPhase: this.lobbyPhase,
+      totalCartelas: this.getTotalSelectedCartelas(),
+      humanCartelas: this.getHumanSelectedCartelas(),
+      robotCartelas: this.getRobotSelectedCartelas(),
+      minRequired: MIN_TOTAL_CARTELAS_TO_START,
+      playersCount: this.playersCount,
+      countdownRemaining: this.getLobbyCountdownRemaining(),
+      countdownEndsAt: this.lobbyCountdownEndsAt,
+      stakesCharged: this.stakesCharged,
+    };
   }
 
   /** Player holds at least one cartela and is seated for the round. */
@@ -957,19 +994,38 @@ class GameSession {
    * @returns {{ ok: boolean, error?: string, alreadyRunning?: boolean, resumed?: boolean }}
    */
   startCalling(io, options = {}) {
+    const diag = this._lobbyCartelaDiag();
     const lobby = gameManager.getLobbySession();
     if (this !== lobby) {
+      console.info('[lobby-diag] startCalling delegate to lobby.ensureBallCaller', {
+        path: 'not_lobby_session',
+        thisGameId: this.gameId,
+        lobbyGameId: lobby?.gameId,
+        ...diag,
+      });
       gameManager.stopOrphanBallCallers(lobby.gameId);
       return lobby.ensureBallCaller(io);
     }
 
     if (this.status === 'calling' && this.drawTimer) {
+      console.info('[lobby-diag] startCalling RETURN', {
+        path: 'already_running_with_draw_timer',
+        ...diag,
+      });
       return { ok: true, alreadyRunning: true };
     }
     if (this.status === 'calling' && !this.drawTimer) {
+      console.info('[lobby-diag] startCalling resumeBallCaller', {
+        path: 'calling_without_draw_timer',
+        ...diag,
+      });
       return this.resumeBallCaller(io);
     }
     if (this._ballCallerStarting) {
+      console.info('[lobby-diag] startCalling RETURN', {
+        path: 'ball_caller_starting_in_flight',
+        ...diag,
+      });
       return { ok: true, alreadyRunning: true };
     }
 
@@ -979,6 +1035,13 @@ class GameSession {
       : this.canStartCalling();
 
     if (!canStart) {
+      console.info('[lobby-diag] startCalling RETURN false', {
+        path: 'cannot_start_yet',
+        forceStart,
+        hasReadyPlayersForStart: this.hasReadyPlayersForStart(),
+        canStartCalling: this.canStartCalling(),
+        ...diag,
+      });
       console.warn(
         `[game] cannot start calling gameId=${this.gameId} players=${this.playersCount} force=${forceStart}`
       );
@@ -1002,6 +1065,11 @@ class GameSession {
       console.log(
         `[game] ball caller started gameId=${this.gameId} interval=${BALL_INTERVAL_MS}ms players=${this.playersCount} token=${loopToken}`
       );
+      console.info('[lobby-diag] startCalling SUCCESS → status=calling', {
+        path: 'ball_caller_started',
+        loopToken,
+        ...this._lobbyCartelaDiag(),
+      });
 
       try {
         const { prepareRobotsForCallingRound } = require('../services/robotEngine');
@@ -1453,7 +1521,7 @@ class GameSession {
     this.prizePool = 0;
     this.clearAllPlayerSelections();
     gameManager.clearSessionUserMappings(this.gameId);
-    this.restartLobbyCountdownLoop();
+    this.restartLobbyCountdownLoop('reset_for_new_round_after_winner');
   }
 
   get roomName() {
@@ -1676,7 +1744,16 @@ class GameSession {
   }
 
   handleLobbyCountdownExpired(io) {
-    if (this.status !== 'waiting') return;
+    const enterDiag = this._lobbyCartelaDiag();
+    console.info('[lobby-diag] handleLobbyCountdownExpired ENTER', enterDiag);
+
+    if (this.status !== 'waiting') {
+      console.info('[lobby-diag] handleLobbyCountdownExpired SKIP', {
+        reason: 'status_not_waiting',
+        ...enterDiag,
+      });
+      return;
+    }
 
     try {
       const { ensureRobotsJoinBeforeRoundStart } = require('../services/robotGameSessionBridge');
@@ -1684,15 +1761,46 @@ class GameSession {
       ensureRobotsJoinBeforeRoundStart(io, this, getRuntimeMap());
     } catch (err) {
       console.warn('[lobby] pre-start robot sync failed', err?.message || err);
+      console.info('[lobby-diag] handleLobbyCountdownExpired robot-sync-error', {
+        error: err?.message || String(err),
+        ...this._lobbyCartelaDiag(),
+      });
     }
 
-    const totalCartelas = this.getTotalSelectedCartelas();
+    const afterRobotDiag = this._lobbyCartelaDiag();
+    console.info('[lobby-diag] handleLobbyCountdownExpired after-robot-sync', afterRobotDiag);
+
+    const totalCartelas = afterRobotDiag.totalCartelas;
     if (totalCartelas >= MIN_TOTAL_CARTELAS_TO_START) {
+      console.info('[lobby-diag] handleLobbyCountdownExpired attempting tryStartLobbyGame', {
+        totalCartelas,
+        minRequired: MIN_TOTAL_CARTELAS_TO_START,
+        ...afterRobotDiag,
+      });
       const started = this.tryStartLobbyGame(io, { fromCountdownExpiry: true });
-      if (started) return;
+      if (started) {
+        console.info('[lobby-diag] handleLobbyCountdownExpired SUCCESS → calling/main-game', {
+          ...this._lobbyCartelaDiag(),
+        });
+        return;
+      }
+      console.info('[lobby-diag] handleLobbyCountdownExpired RESTART because tryStartLobbyGame returned false', {
+        restartReason: 'try_start_returned_false',
+        ...this._lobbyCartelaDiag(),
+      });
+      this.restartLobbyCountdownLoop('countdown_expired_try_start_failed');
+      return;
     }
 
-    this.restartLobbyCountdownLoop();
+    console.info('[lobby-diag] handleLobbyCountdownExpired RESTART because insufficient total cartelas', {
+      restartReason: 'insufficient_total_cartelas',
+      totalCartelas,
+      minRequired: MIN_TOTAL_CARTELAS_TO_START,
+      humanCartelas: afterRobotDiag.humanCartelas,
+      robotCartelas: afterRobotDiag.robotCartelas,
+      ...afterRobotDiag,
+    });
+    this.restartLobbyCountdownLoop('countdown_expired_insufficient_cartelas');
   }
 
   /**
@@ -1700,10 +1808,34 @@ class GameSession {
    * @returns {boolean} true when the round entered calling state
    */
   tryStartLobbyGame(io, options = {}) {
-    if (this.status !== 'waiting') return false;
+    const diag = this._lobbyCartelaDiag();
     const fromCountdownExpiry = options.fromCountdownExpiry === true;
-    if (!fromCountdownExpiry && this.getLobbyCountdownRemaining() > 0) return false;
-    if (!this.hasMinimumCartelasToStart()) return false;
+
+    if (this.status !== 'waiting') {
+      console.info('[lobby-diag] tryStartLobbyGame RETURN false', {
+        path: 'status_not_waiting',
+        fromCountdownExpiry,
+        ...diag,
+      });
+      return false;
+    }
+    if (!fromCountdownExpiry && this.getLobbyCountdownRemaining() > 0) {
+      console.info('[lobby-diag] tryStartLobbyGame RETURN false', {
+        path: 'countdown_still_running',
+        fromCountdownExpiry,
+        countdownRemaining: this.getLobbyCountdownRemaining(),
+        ...diag,
+      });
+      return false;
+    }
+    if (!this.hasMinimumCartelasToStart()) {
+      console.info('[lobby-diag] tryStartLobbyGame RETURN false', {
+        path: 'below_minimum_cartelas',
+        fromCountdownExpiry,
+        ...diag,
+      });
+      return false;
+    }
 
     const ready = this.allSeatedPlayers().filter((p) => this.playerHasAnyCartelas(p));
 
@@ -1711,6 +1843,16 @@ class GameSession {
     const startResult = chargeAndStartSession(this, io, { forceStart: true });
 
     if (!startResult.ok) {
+      console.info('[lobby-diag] tryStartLobbyGame RETURN false', {
+        path: 'charge_and_start_failed',
+        fromCountdownExpiry,
+        chargeError: startResult.error ?? null,
+        chargeUserId: startResult.userId ?? null,
+        chargeRequired: startResult.required ?? null,
+        chargeAvailable: startResult.available ?? null,
+        startResult,
+        ...diag,
+      });
       console.warn('[lobby] game start failed', startResult.error);
 
       if (
@@ -1753,6 +1895,18 @@ class GameSession {
     }
 
     this.emitLobbyGameStarted(io, ready);
+    console.info('[lobby-diag] tryStartLobbyGame RETURN true → emitLobbyGameStarted', {
+      path: 'success',
+      fromCountdownExpiry,
+      startResult: {
+        ok: startResult.ok,
+        gameId: startResult.gameId,
+        alreadyRunning: startResult.alreadyRunning,
+        totalPool: startResult.totalPool,
+      },
+      readyPlayerCount: ready.length,
+      ...this._lobbyCartelaDiag(),
+    });
     return true;
   }
 
