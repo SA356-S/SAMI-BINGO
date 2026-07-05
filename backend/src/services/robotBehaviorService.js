@@ -575,7 +575,7 @@ const HUMAN_WIN_LINES = [
   ]),
 ];
 
-function getHumanPlayerCartelMarks(player, cartelId) {
+function getPlayerCartelMarks(player, cartelId) {
   return (
     player?.manualMarks?.[String(cartelId)] ??
     player?.manualMarks?.[cartelId] ??
@@ -583,7 +583,12 @@ function getHumanPlayerCartelMarks(player, cartelId) {
   );
 }
 
-function minHumanRemainingCellsToWin(cartelId, calledNumbers, manualMarks, automatic) {
+function minRemainingCellsToWinOnOwnedCartel(
+  cartelId,
+  calledNumbers,
+  manualMarks,
+  automatic
+) {
   const markedKeys = getCartelMarkedKeys(
     cartelId,
     calledNumbers,
@@ -604,56 +609,67 @@ function minHumanRemainingCellsToWin(cartelId, calledNumbers, manualMarks, autom
 }
 
 /**
- * Human completed bingo on the latest call after being exactly 1 cell from a win.
+ * Evaluate one owned cartel for a seated player.
+ * @returns {'bingo_now'|'one_step_away'|null}
  */
-function isHumanOneStepCompletionOnCurrentCall(session, player, cartelId) {
-  const calledNumbers = session.calledNumbers;
-  if (!Array.isArray(calledNumbers) || calledNumbers.length < 1) return false;
-
-  const manualMarks = getHumanPlayerCartelMarks(player, cartelId);
+function evaluateOwnedCartelWinState(session, player, cartelId) {
+  const manualMarks = getPlayerCartelMarks(player, cartelId);
   const automatic = Boolean(player.automatic);
-  const beforeCall = calledNumbers.slice(0, -1);
+  const calledNumbers = session.calledNumbers;
 
-  if (!validateBingoClaim(cartelId, calledNumbers, manualMarks, automatic)) {
-    return false;
-  }
-  if (validateBingoClaim(cartelId, beforeCall, manualMarks, automatic)) {
-    return false;
+  if (validateBingoClaim(cartelId, calledNumbers, manualMarks, automatic)) {
+    return 'bingo_now';
   }
 
-  return minHumanRemainingCellsToWin(cartelId, beforeCall, manualMarks, automatic) === 1;
+  if (
+    minRemainingCellsToWinOnOwnedCartel(
+      cartelId,
+      calledNumbers,
+      manualMarks,
+      automatic
+    ) === 1
+  ) {
+    return 'one_step_away';
+  }
+
+  return null;
 }
 
-function anyHumanOneStepCompletionOnCurrentCall(session) {
+/**
+ * STEP 1 + STEP 2 — iterate every session player; evaluate only that player's cartelIds.
+ * Returns true when any human owned cartel is bingo-ready or exactly 1 step away.
+ */
+function scanAllSessionPlayersForHumanNearWinThreat(session) {
+  if (!session?.players?.size) return false;
+
   for (const player of session.players.values()) {
-    if (!isHumanUserId(player.userId)) continue;
-    const cartelIds = player.cartelIds;
+    const cartelIds = player?.cartelIds;
     if (!Array.isArray(cartelIds) || cartelIds.length === 0) continue;
+
+    if (!isHumanUserId(player.userId)) continue;
 
     for (const rawId of cartelIds) {
       const cartelId = Number(rawId);
       if (!Number.isInteger(cartelId) || cartelId < 1) continue;
-      if (isHumanOneStepCompletionOnCurrentCall(session, player, cartelId)) {
+
+      const winState = evaluateOwnedCartelWinState(session, player, cartelId);
+      if (winState === 'bingo_now' || winState === 'one_step_away') {
         return true;
       }
     }
   }
+
   return false;
 }
 
-/**
- * Emergency override inside win evaluation: when a human just completed bingo on
- * this call (was 1 step away), declare the designated robot winner on this call.
- * Win-percent scheduling (canRobotClaimNow) is not used here; normal path below is unchanged.
- */
-function tryEmergencyRobotWinOnHumanOneStepCompletion(
+/** STEP 3a — single robot win attempt on near-win interrupt (own cartels only). */
+function declareRobotWinnerOnNearWinInterrupt(
   io,
   session,
   runtime,
   designatedRobotId,
   t
 ) {
-  if (!anyHumanOneStepCompletionOnCurrentCall(session)) return false;
   if (!designatedRobotId) return false;
 
   for (const rt of runtime.values()) {
@@ -661,19 +677,14 @@ function tryEmergencyRobotWinOnHumanOneStepCompletion(
     if (!isParticipatingRobot(session, rt) || rt.claimedForRound) continue;
 
     syncRobotCartelsForRound(session, rt);
-    if (!rt.paidForRound || !rt.currentRoundCartels?.length) continue;
-
-    const plan = robotDrawAssist.getRoundPlan(session.gameId);
     const cartelIds = rt.currentRoundCartels;
-    const preferredCartelId =
-      plan?.cartelId != null && cartelIds.includes(Number(plan.cartelId))
-        ? Number(plan.cartelId)
-        : null;
-    const orderedCartelIds = preferredCartelId
-      ? [preferredCartelId, ...cartelIds.filter((id) => Number(id) !== preferredCartelId)]
-      : cartelIds;
+    if (!rt.paidForRound || !Array.isArray(cartelIds) || cartelIds.length === 0) {
+      continue;
+    }
 
-    for (const cartelId of orderedCartelIds) {
+    for (const rawId of cartelIds) {
+      const cartelId = Number(rawId);
+      if (!Number.isInteger(cartelId) || cartelId < 1) continue;
       if (!validateBingoClaim(cartelId, session.calledNumbers, {}, true)) continue;
       if (declareRobotWinner(io, session, rt, cartelId, t)) {
         return true;
@@ -750,18 +761,22 @@ function tryEvaluateBingos(io, session, cfg, runtime, state, advantageLevel) {
   const level = clampRobotAdvantageLevel(advantageLevel);
   const designatedRobotId = getDesignatedWinnerRobotId(session, runtime, state);
 
-  if (
-    tryEmergencyRobotWinOnHumanOneStepCompletion(
+  // STEP 1 + STEP 2 — scan all session players; each player uses only their cartelIds.
+  const humanNearWinThreat = scanAllSessionPlayersForHumanNearWinThreat(session);
+
+  // STEP 3 — single decision per call tick (near-win interrupt before win-percent).
+  if (humanNearWinThreat) {
+    declareRobotWinnerOnNearWinInterrupt(
       io,
       session,
       runtime,
       designatedRobotId,
       t
-    )
-  ) {
+    );
     return;
   }
 
+  // Win-percent scheduling (unchanged).
   if (trySubmitPendingClaims(io, session, runtime, level, t, state)) {
     return;
   }
