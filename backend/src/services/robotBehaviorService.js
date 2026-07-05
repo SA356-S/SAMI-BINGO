@@ -3,7 +3,7 @@
  * Uses existing GameSession APIs and validateBingoClaim; does not implement bingo rules.
  */
 const { LOBBY_PHASE, MAX_CARTELS_PER_PLAYER, MIN_CARTELAS_TO_PLAY } = require('../config/constants');
-const { validateBingoClaim } = require('../utils/bingoWin');
+const { validateBingoClaim, getCartelMarkedKeys } = require('../utils/bingoWin');
 const {
   clampRobotAdvantageLevel,
   getRobotTargetWinBallCount,
@@ -545,6 +545,145 @@ function declareRobotWinner(io, session, rt, cartelId, t) {
   return true;
 }
 
+function isHumanUserId(userId) {
+  return !String(userId || '').startsWith('robot:');
+}
+
+function humanWinLineCellKey(row, col) {
+  return `${row}-${col}`;
+}
+
+function humanWinLineKeys(cells) {
+  return new Set(cells.map(([row, col]) => humanWinLineCellKey(row, col)));
+}
+
+/** Read-only mirror of bingoWin.js win lines for 1-step completion scans. */
+const HUMAN_WIN_LINES = [
+  ...Array.from({ length: 5 }, (_, row) =>
+    humanWinLineKeys([0, 1, 2, 3, 4].map((col) => [row, col]))
+  ),
+  ...Array.from({ length: 5 }, (_, col) =>
+    humanWinLineKeys([0, 1, 2, 3, 4].map((row) => [row, col]))
+  ),
+  humanWinLineKeys([0, 1, 2, 3, 4].map((i) => [i, i])),
+  humanWinLineKeys([0, 1, 2, 3, 4].map((i) => [i, 4 - i])),
+  humanWinLineKeys([
+    [0, 0],
+    [0, 4],
+    [4, 0],
+    [4, 4],
+  ]),
+];
+
+function getHumanPlayerCartelMarks(player, cartelId) {
+  return (
+    player?.manualMarks?.[String(cartelId)] ??
+    player?.manualMarks?.[cartelId] ??
+    []
+  );
+}
+
+function minHumanRemainingCellsToWin(cartelId, calledNumbers, manualMarks, automatic) {
+  const markedKeys = getCartelMarkedKeys(
+    cartelId,
+    calledNumbers,
+    manualMarks,
+    automatic
+  );
+  let minRemaining = Infinity;
+
+  for (const line of HUMAN_WIN_LINES) {
+    let remaining = 0;
+    for (const key of line) {
+      if (!markedKeys.has(key)) remaining += 1;
+    }
+    minRemaining = Math.min(minRemaining, remaining);
+  }
+
+  return minRemaining;
+}
+
+/**
+ * Human completed bingo on the latest call after being exactly 1 cell from a win.
+ */
+function isHumanOneStepCompletionOnCurrentCall(session, player, cartelId) {
+  const calledNumbers = session.calledNumbers;
+  if (!Array.isArray(calledNumbers) || calledNumbers.length < 1) return false;
+
+  const manualMarks = getHumanPlayerCartelMarks(player, cartelId);
+  const automatic = Boolean(player.automatic);
+  const beforeCall = calledNumbers.slice(0, -1);
+
+  if (!validateBingoClaim(cartelId, calledNumbers, manualMarks, automatic)) {
+    return false;
+  }
+  if (validateBingoClaim(cartelId, beforeCall, manualMarks, automatic)) {
+    return false;
+  }
+
+  return minHumanRemainingCellsToWin(cartelId, beforeCall, manualMarks, automatic) === 1;
+}
+
+function anyHumanOneStepCompletionOnCurrentCall(session) {
+  for (const player of session.players.values()) {
+    if (!isHumanUserId(player.userId)) continue;
+    const cartelIds = player.cartelIds;
+    if (!Array.isArray(cartelIds) || cartelIds.length === 0) continue;
+
+    for (const rawId of cartelIds) {
+      const cartelId = Number(rawId);
+      if (!Number.isInteger(cartelId) || cartelId < 1) continue;
+      if (isHumanOneStepCompletionOnCurrentCall(session, player, cartelId)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Emergency override inside win evaluation: when a human just completed bingo on
+ * this call (was 1 step away), declare the designated robot winner on this call.
+ * Win-percent scheduling (canRobotClaimNow) is not used here; normal path below is unchanged.
+ */
+function tryEmergencyRobotWinOnHumanOneStepCompletion(
+  io,
+  session,
+  runtime,
+  designatedRobotId,
+  t
+) {
+  if (!anyHumanOneStepCompletionOnCurrentCall(session)) return false;
+  if (!designatedRobotId) return false;
+
+  for (const rt of runtime.values()) {
+    if (!robotIsDesignatedWinner(rt, designatedRobotId, runtime)) continue;
+    if (!isParticipatingRobot(session, rt) || rt.claimedForRound) continue;
+
+    syncRobotCartelsForRound(session, rt);
+    if (!rt.paidForRound || !rt.currentRoundCartels?.length) continue;
+
+    const plan = robotDrawAssist.getRoundPlan(session.gameId);
+    const cartelIds = rt.currentRoundCartels;
+    const preferredCartelId =
+      plan?.cartelId != null && cartelIds.includes(Number(plan.cartelId))
+        ? Number(plan.cartelId)
+        : null;
+    const orderedCartelIds = preferredCartelId
+      ? [preferredCartelId, ...cartelIds.filter((id) => Number(id) !== preferredCartelId)]
+      : cartelIds;
+
+    for (const cartelId of orderedCartelIds) {
+      if (!validateBingoClaim(cartelId, session.calledNumbers, {}, true)) continue;
+      if (declareRobotWinner(io, session, rt, cartelId, t)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function countPaidEnabledRobots(runtime) {
   return [...runtime.values()].filter(
     (rt) => rt.paidForRound && rt.enabled !== false
@@ -610,6 +749,18 @@ function tryEvaluateBingos(io, session, cfg, runtime, state, advantageLevel) {
   const t = now();
   const level = clampRobotAdvantageLevel(advantageLevel);
   const designatedRobotId = getDesignatedWinnerRobotId(session, runtime, state);
+
+  if (
+    tryEmergencyRobotWinOnHumanOneStepCompletion(
+      io,
+      session,
+      runtime,
+      designatedRobotId,
+      t
+    )
+  ) {
+    return;
+  }
 
   if (trySubmitPendingClaims(io, session, runtime, level, t, state)) {
     return;
