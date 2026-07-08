@@ -5,7 +5,6 @@ import {
   getApiErrorMessage,
   updateFirstDepositBonusSettings,
 } from '../services/api';
-import type { FirstDepositBonusSettings } from '../types';
 
 function normalizePercent(value: number) {
   if (!Number.isFinite(value) || value < 0) return 0;
@@ -13,7 +12,6 @@ function normalizePercent(value: number) {
 }
 
 export default function FirstDepositBonusPage() {
-  const [settings, setSettings] = useState<FirstDepositBonusSettings | null>(null);
   const [enabledDraft, setEnabledDraft] = useState(false);
   const [percentDraft, setPercentDraft] = useState(100);
   const [loading, setLoading] = useState(true);
@@ -26,7 +24,6 @@ export default function FirstDepositBonusPage() {
     setError(null);
     try {
       const data = await fetchFirstDepositBonusSettings();
-      setSettings(data);
       setEnabledDraft(Boolean(data.firstDepositBonusEnabled));
       setPercentDraft(normalizePercent(Number(data.firstDepositBonusPercent) || 0));
     } catch (err) {
@@ -49,7 +46,6 @@ export default function FirstDepositBonusPage() {
         firstDepositBonusEnabled: enabledDraft,
         firstDepositBonusPercent: normalizePercent(percentDraft),
       });
-      setSettings(data);
       setEnabledDraft(Boolean(data.firstDepositBonusEnabled));
       setPercentDraft(normalizePercent(Number(data.firstDepositBonusPercent) || 0));
       setMessage('First deposit bonus settings saved.');
