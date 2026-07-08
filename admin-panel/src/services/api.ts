@@ -24,6 +24,7 @@ import type {
   RobotAdvantageSettings,
   CardSelectionTimeSettings,
   RegistrationBonusSettings,
+  FirstDepositBonusSettings,
   WithdrawRequestsResponse,
   WithdrawRequestStatus,
   DailyProfitSummary,
@@ -280,6 +281,24 @@ export async function updateRegistrationBonusSettings(payload: {
 }) {
   const { data } = await api.put<RegistrationBonusSettings>(
     '/settings/registration-bonus',
+    payload
+  );
+  return data;
+}
+
+export async function fetchFirstDepositBonusSettings() {
+  const { data } = await api.get<FirstDepositBonusSettings>(
+    '/settings/first-deposit-bonus'
+  );
+  return data;
+}
+
+export async function updateFirstDepositBonusSettings(payload: {
+  firstDepositBonusEnabled?: boolean;
+  firstDepositBonusPercent?: number;
+}) {
+  const { data } = await api.put<FirstDepositBonusSettings>(
+    '/settings/first-deposit-bonus',
     payload
   );
   return data;

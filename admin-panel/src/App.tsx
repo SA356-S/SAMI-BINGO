@@ -16,6 +16,7 @@ import RobotsPage from './pages/RobotsPage';
 import BroadcastPage from './pages/BroadcastPage';
 import WithdrawRequestsPage from './pages/WithdrawRequestsPage';
 import RegistrationBonusPage from './pages/RegistrationBonusPage';
+import FirstDepositBonusPage from './pages/FirstDepositBonusPage';
 import AdminLayout from './components/AdminLayout';
 
 function ProtectedRoute() {
@@ -126,6 +127,14 @@ export default function App() {
             element={
               <RoleRoute roles={['manager']}>
                 <RegistrationBonusPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/first-deposit-bonus"
+            element={
+              <RoleRoute roles={['manager']}>
+                <FirstDepositBonusPage />
               </RoleRoute>
             }
           />

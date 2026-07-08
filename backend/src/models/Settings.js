@@ -13,6 +13,9 @@ const settingsSchema = new mongoose.Schema(
     /** Registration welcome bonus — admin controlled */
     registrationBonusEnabled: { type: Boolean, default: false },
     registrationBonusAmount: { type: Number, default: 0, min: 0 },
+    /** One-time first approved deposit bonus — admin controlled */
+    firstDepositBonusEnabled: { type: Boolean, default: false },
+    firstDepositBonusPercent: { type: Number, default: 100 },
   },
   { timestamps: true, collection: 'settings' }
 );

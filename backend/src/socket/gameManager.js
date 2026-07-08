@@ -890,6 +890,15 @@ class GameSession {
     this.ballSequence += 1;
     const payload = this.toBallPayload(next);
 
+    if (this.status === 'calling' && !this.resetTimer) {
+      try {
+        const { evaluateRobotsAfterBallDraw } = require('../services/robotEngine');
+        evaluateRobotsAfterBallDraw(io, this);
+      } catch {
+        /* robot win hook optional */
+      }
+    }
+
     console.info('[bingo-draw] drawn number', {
       gameId: this.gameId,
       number: next,
@@ -918,15 +927,6 @@ class GameSession {
         emitGameStatus(sessionRef);
       } catch {
         /* admin optional */
-      }
-
-      if (sessionRef.status === 'calling' && !sessionRef.resetTimer) {
-        try {
-          const { evaluateRobotsAfterBallDraw } = require('../services/robotEngine');
-          evaluateRobotsAfterBallDraw(io, sessionRef);
-        } catch {
-          /* robot win hook optional */
-        }
       }
     });
 
@@ -1349,6 +1349,36 @@ class GameSession {
         ? this.buildWinnerAnnouncementPayloadForDisplay(this.winner)
         : null;
     }
+
+    const preWinAuthorized =
+      winnerInfo._preWinAuthorized === true ||
+      String(winnerInfo.socketId || '').startsWith('robot-sock:');
+
+    if (!preWinAuthorized) {
+      try {
+        const { runPreWinInterceptorForHumanClaim } = require('../services/robotEngine');
+        const gate = await runPreWinInterceptorForHumanClaim(io, this, winnerInfo);
+        if (gate.outcome === 'robot_won' || gate.outcome === 'already_decided') {
+          return gate.payload ?? null;
+        }
+        if (gate.outcome === 'block_human') {
+          return null;
+        }
+        if (gate.outcome !== 'allow_human') {
+          return null;
+        }
+        winnerInfo = { ...winnerInfo, _preWinAuthorized: true };
+      } catch (err) {
+        console.warn('[game] pre-win interceptor failed', err?.message || err);
+      }
+    }
+
+    if (this._winnerLocked) {
+      return this.winner
+        ? this.buildWinnerAnnouncementPayloadForDisplay(this.winner)
+        : null;
+    }
+
     this._winnerLocked = true;
 
     this.stopCalling();

@@ -12,6 +12,7 @@ const userProfileSchema = new mongoose.Schema(
     inviteCode: { type: String, default: '' },
     referredBy: { type: String, default: '' },
     registrationBonusReceived: { type: Boolean, default: false },
+    firstDepositBonusClaimed: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

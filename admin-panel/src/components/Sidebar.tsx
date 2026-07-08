@@ -17,6 +17,7 @@ const NAV: NavItem[] = [
   { to: '/withdraw-requests', label: 'Withdraw Requests', roles: ['admin', 'manager'] },
   { to: '/user-balance', label: 'User Balance', roles: ['manager'] },
   { to: '/registration-bonus', label: 'Registration Bonus', roles: ['manager'] },
+  { to: '/first-deposit-bonus', label: 'First Deposit Bonus', roles: ['manager'] },
   { to: '/user-management', label: 'User Management', roles: ['manager'] },
   { to: '/robots', label: 'Robots', roles: ['manager'] },
   { to: '/broadcast', label: 'Broadcast', roles: ['admin', 'manager'] },

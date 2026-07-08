@@ -856,14 +856,22 @@ function registerSocketHandlers(io) {
 
       const primaryCartelId = cartelId;
 
-      const winnerPayload =
-        (await session.declareWinner(io, {
-          socketId: socket.id,
-          cartelId: primaryCartelId,
-          primaryCartelId,
-          playerName: payload.playerName || socket.data.playerName,
-          winners: payload.winners,
-        })) ??
+      const winnerPayload = await session.declareWinner(io, {
+        socketId: socket.id,
+        cartelId: primaryCartelId,
+        primaryCartelId,
+        playerName: payload.playerName || socket.data.playerName,
+        winners: payload.winners,
+      });
+
+      if (!winnerPayload) {
+        const err = { ok: false, error: 'No Bingo' };
+        if (typeof ack === 'function') ack(err);
+        return;
+      }
+
+      const resolvedPayload =
+        winnerPayload ??
         (await session.buildWinnerAnnouncementPayloadForDisplay({
           socketId: socket.id,
           cartelId: primaryCartelId,
@@ -877,7 +885,7 @@ function registerSocketHandlers(io) {
 
       if (typeof ack === 'function') {
         ack({
-          ...winnerPayload,
+          ...resolvedPayload,
           ...toSnapshot(wallet),
         });
       }

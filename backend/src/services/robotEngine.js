@@ -264,10 +264,32 @@ function getRuntimeMap() {
   return runtime;
 }
 
+async function runPreWinInterceptorForHumanClaim(io, session, winnerInfo = {}) {
+  const cfg = robotConfigService.getConfigSync();
+  const result = robotBehavior.preWinInterceptor(
+    io,
+    session,
+    cfg,
+    runtime,
+    state,
+    { source: 'human_claim', winnerInfo }
+  );
+
+  if (result.outcome === 'robot_won' || result.outcome === 'already_decided') {
+    const payload =
+      result.payload ??
+      (await session.buildWinnerAnnouncementPayloadForDisplay(session.winner));
+    return { ...result, payload };
+  }
+
+  return result;
+}
+
 module.exports = {
   startRobotEngine,
   refreshActiveRobotsCache,
   getRuntimeMap,
   evaluateRobotsAfterBallDraw,
   prepareRobotsForCallingRound,
+  runPreWinInterceptorForHumanClaim,
 };

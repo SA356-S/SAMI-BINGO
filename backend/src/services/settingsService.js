@@ -19,6 +19,8 @@ const DEFAULT_SETTINGS = {
   robotAdvantageLevel: 0,
   registrationBonusEnabled: false,
   registrationBonusAmount: 0,
+  firstDepositBonusEnabled: false,
+  firstDepositBonusPercent: 100,
 };
 
 const memorySettings = { ...DEFAULT_SETTINGS };
@@ -137,6 +139,65 @@ function getRegistrationBonusSettingsSync() {
   );
 }
 
+function normalizeFirstDepositBonusPercent(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
+function buildFirstDepositBonusPayload(enabled, percent) {
+  return {
+    firstDepositBonusEnabled: Boolean(enabled),
+    firstDepositBonusPercent: normalizeFirstDepositBonusPercent(percent),
+  };
+}
+
+async function getFirstDepositBonusSettings() {
+  await getSettings();
+  return buildFirstDepositBonusPayload(
+    memorySettings.firstDepositBonusEnabled,
+    memorySettings.firstDepositBonusPercent
+  );
+}
+
+function getFirstDepositBonusSettingsSync() {
+  return buildFirstDepositBonusPayload(
+    memorySettings.firstDepositBonusEnabled,
+    memorySettings.firstDepositBonusPercent
+  );
+}
+
+async function updateFirstDepositBonusSettings({ enabled, percent } = {}) {
+  const patch = {};
+
+  if (enabled !== undefined) {
+    patch.firstDepositBonusEnabled = Boolean(enabled);
+  }
+  if (percent !== undefined) {
+    patch.firstDepositBonusPercent = normalizeFirstDepositBonusPercent(percent);
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return getFirstDepositBonusSettings();
+  }
+
+  if (isDbReady()) {
+    const doc = await SettingsModel.findOneAndUpdate(
+      { settingsId: DEFAULT_SETTINGS.settingsId },
+      { $set: patch, $setOnInsert: { settingsId: DEFAULT_SETTINGS.settingsId } },
+      { upsert: true, new: true, lean: true }
+    );
+    Object.assign(memorySettings, doc);
+  } else {
+    Object.assign(memorySettings, patch);
+  }
+
+  return buildFirstDepositBonusPayload(
+    memorySettings.firstDepositBonusEnabled,
+    memorySettings.firstDepositBonusPercent
+  );
+}
+
 async function updateRegistrationBonusSettings({ enabled, amount } = {}) {
   const patch = {};
 
@@ -199,4 +260,7 @@ module.exports = {
   getRegistrationBonusSettings,
   getRegistrationBonusSettingsSync,
   updateRegistrationBonusSettings,
+  getFirstDepositBonusSettings,
+  getFirstDepositBonusSettingsSync,
+  updateFirstDepositBonusSettings,
 };

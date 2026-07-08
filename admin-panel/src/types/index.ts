@@ -229,6 +229,12 @@ export interface RegistrationBonusSettings {
   maxAmount: number;
 }
 
+export interface FirstDepositBonusSettings {
+  ok?: boolean;
+  firstDepositBonusEnabled: boolean;
+  firstDepositBonusPercent: number;
+}
+
 export interface RobotsSummarySnapshot {
   totalRobots: number;
   activeRobots: number;

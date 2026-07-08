@@ -126,4 +126,46 @@ router.put('/registration-bonus', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/settings/first-deposit-bonus
+ */
+router.get('/first-deposit-bonus', async (_req, res) => {
+  try {
+    const settings = await settingsService.getFirstDepositBonusSettings();
+    res.json({ ok: true, ...settings });
+  } catch (err) {
+    console.error('[settings] GET first-deposit-bonus error', err);
+    res.status(500).json({ ok: false, error: 'first_deposit_bonus_fetch_failed' });
+  }
+});
+
+/**
+ * PUT /api/settings/first-deposit-bonus
+ * Body: { firstDepositBonusEnabled?: boolean, firstDepositBonusPercent?: number }
+ */
+router.put('/first-deposit-bonus', async (req, res) => {
+  try {
+    const enabled =
+      req.body?.firstDepositBonusEnabled ?? req.body?.enabled;
+    const percent =
+      req.body?.firstDepositBonusPercent ?? req.body?.percent;
+
+    if (enabled === undefined && percent === undefined) {
+      return res.status(400).json({
+        ok: false,
+        error: 'first_deposit_bonus_fields_required',
+      });
+    }
+
+    const settings = await settingsService.updateFirstDepositBonusSettings({
+      enabled,
+      percent,
+    });
+    res.json({ ok: true, ...settings });
+  } catch (err) {
+    console.error('[settings] PUT first-deposit-bonus error', err);
+    res.status(500).json({ ok: false, error: 'first_deposit_bonus_update_failed' });
+  }
+});
+
 module.exports = router;

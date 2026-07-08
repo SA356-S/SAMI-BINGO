@@ -505,12 +505,15 @@ function getRobotVisibleCalledNumbers(session, rt) {
 }
 
 function declareRobotWinner(io, session, rt, cartelId, t) {
+  if (session._winnerLocked || session.winner) return false;
+
   const winnerPayload = session.declareWinner(io, {
     socketId: rt.pseudoSocketId,
     cartelId,
     primaryCartelId: cartelId,
     playerName: rt.displayName,
     winners: undefined,
+    _preWinAuthorized: true,
   });
 
   if (!winnerPayload) return false;
@@ -662,14 +665,8 @@ function scanAllSessionPlayersForHumanNearWinThreat(session) {
   return false;
 }
 
-/** STEP 3a — single robot win attempt on near-win interrupt (own cartels only). */
-function declareRobotWinnerOnNearWinInterrupt(
-  io,
-  session,
-  runtime,
-  designatedRobotId,
-  t
-) {
+/** STEP 3 — designated robot win via pre-win gate (own cartels only). */
+function tryDeclareDesignatedRobotWin(io, session, runtime, designatedRobotId, t) {
   if (!designatedRobotId) return false;
 
   for (const rt of runtime.values()) {
@@ -695,6 +692,116 @@ function declareRobotWinnerOnNearWinInterrupt(
   return false;
 }
 
+function buildWinnerDisplayPayload(session) {
+  return session.winnerDisplayPayload ?? null;
+}
+
+/**
+ * Win-percent scheduling only — returns candidate without declaring a winner.
+ */
+function findWinPercentScheduledRobotWin(session, runtime, state, advantageLevel, t) {
+  const level = clampRobotAdvantageLevel(advantageLevel);
+  const designatedRobotId = getDesignatedWinnerRobotId(session, runtime, state);
+  const claimDelay = getRobotClaimDelayMs(level);
+  readSessionWinPercent(session);
+
+  for (const rt of runtime.values()) {
+    if (!robotIsDesignatedWinner(rt, designatedRobotId, runtime)) continue;
+    if (!rt.pendingClaim || rt.claimedForRound) continue;
+    if (!rt.paidForRound) {
+      rt.pendingClaim = null;
+      continue;
+    }
+
+    const pending = rt.pendingClaim;
+    if (t - pending.detectedAt < claimDelay) continue;
+    if (!robotDrawAssist.canRobotClaimNow(rt, session.calledNumbers.length, level)) {
+      continue;
+    }
+    if (!validateBingoClaim(pending.cartelId, session.calledNumbers, {}, true)) {
+      rt.pendingClaim = null;
+      continue;
+    }
+    return { rt, cartelId: pending.cartelId };
+  }
+
+  const calledLen = session.calledNumbers.length;
+  for (const rt of runtime.values()) {
+    if (!robotIsDesignatedWinner(rt, designatedRobotId, runtime)) continue;
+    if (!isParticipatingRobot(session, rt) || rt.claimedForRound) continue;
+
+    syncRobotCartelsForRound(session, rt);
+    if (!rt.paidForRound || !rt.currentRoundCartels?.length) continue;
+
+    rt.targetWinBallCount = getRobotTargetWinBallCount(level, rt.robotId);
+    advanceRobotMarking(rt, session, level, t);
+
+    if (!robotDrawAssist.canRobotClaimNow(rt, calledLen, level)) continue;
+
+    for (const cartelId of rt.currentRoundCartels) {
+      if (!validateBingoClaim(cartelId, session.calledNumbers, {}, true)) continue;
+      return { rt, cartelId };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Single pre-win gate — every final win decision routes here first.
+ * @returns {{ outcome: 'robot_won'|'block_human'|'allow_human'|'noop'|'already_decided', payload?: object|null }}
+ */
+function preWinInterceptor(io, session, cfg, runtime, state, context = {}) {
+  if (session._winnerLocked || session.winner) {
+    return { outcome: 'already_decided', payload: buildWinnerDisplayPayload(session) };
+  }
+
+  if (!hasEnabledRobotsInRound(session, runtime, cfg)) {
+    return context.source === 'human_claim'
+      ? { outcome: 'allow_human', payload: null }
+      : { outcome: 'noop', payload: null };
+  }
+
+  const t = now();
+  const designatedRobotId = getDesignatedWinnerRobotId(session, runtime, state);
+  const humanNearWinThreat = scanAllSessionPlayersForHumanNearWinThreat(session);
+
+  if (humanNearWinThreat) {
+    if (tryDeclareDesignatedRobotWin(io, session, runtime, designatedRobotId, t)) {
+      return { outcome: 'robot_won', payload: buildWinnerDisplayPayload(session) };
+    }
+    if (context.source === 'human_claim') {
+      return { outcome: 'block_human', payload: null };
+    }
+    return { outcome: 'noop', payload: null };
+  }
+
+  if (context.source === 'ball_eval') {
+    const scheduled = findWinPercentScheduledRobotWin(
+      session,
+      runtime,
+      state,
+      context.advantageLevel,
+      t
+    );
+    if (scheduled) {
+      const { rt, cartelId } = scheduled;
+      if (declareRobotWinner(io, session, rt, cartelId, t)) {
+        state.lastBingoEvalCalledLen = session.calledNumbers.length;
+        return { outcome: 'robot_won', payload: buildWinnerDisplayPayload(session) };
+      }
+    }
+    state.lastBingoEvalCalledLen = session.calledNumbers.length;
+    return { outcome: 'noop', payload: null };
+  }
+
+  if (context.source === 'human_claim') {
+    return { outcome: 'allow_human', payload: null };
+  }
+
+  return { outcome: 'noop', payload: null };
+}
+
 function countPaidEnabledRobots(runtime) {
   return [...runtime.values()].filter(
     (rt) => rt.paidForRound && rt.enabled !== false
@@ -717,95 +824,17 @@ function robotIsDesignatedWinner(rt, designatedRobotId, runtime) {
   return String(rt.robotId) === String(designatedRobotId);
 }
 
-function trySubmitPendingClaims(io, session, runtime, advantageLevel, t, state) {
-  const claimDelay = getRobotClaimDelayMs(advantageLevel);
-  readSessionWinPercent(session);
-  const designatedRobotId = getDesignatedWinnerRobotId(session, runtime, state);
-
-  for (const rt of runtime.values()) {
-    if (!robotIsDesignatedWinner(rt, designatedRobotId, runtime)) continue;
-    if (!rt.pendingClaim || rt.claimedForRound) continue;
-    if (!rt.paidForRound) {
-      rt.pendingClaim = null;
-      continue;
-    }
-
-    const pending = rt.pendingClaim;
-    if (t - pending.detectedAt < claimDelay) continue;
-    if (!robotDrawAssist.canRobotClaimNow(rt, session.calledNumbers.length, advantageLevel)) {
-      continue;
-    }
-
-    if (!validateBingoClaim(pending.cartelId, session.calledNumbers, {}, true)) {
-      rt.pendingClaim = null;
-      continue;
-    }
-
-    if (declareRobotWinner(io, session, rt, pending.cartelId, t)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function tryEvaluateBingos(io, session, cfg, runtime, state, advantageLevel) {
   if (!session || session.status !== 'calling' || session.resetTimer) return;
   if (session.winner || session._winnerLocked) return;
-  if (!hasEnabledRobotsInRound(session, runtime, cfg)) return;
 
   const calledLen = session.calledNumbers.length;
   if (!calledLen) return;
 
-  const t = now();
-  const level = clampRobotAdvantageLevel(advantageLevel);
-  const designatedRobotId = getDesignatedWinnerRobotId(session, runtime, state);
-
-  // STEP 1 + STEP 2 — scan all session players; each player uses only their cartelIds.
-  const humanNearWinThreat = scanAllSessionPlayersForHumanNearWinThreat(session);
-
-  // STEP 3 — single decision per call tick (near-win interrupt before win-percent).
-  if (humanNearWinThreat) {
-    declareRobotWinnerOnNearWinInterrupt(
-      io,
-      session,
-      runtime,
-      designatedRobotId,
-      t
-    );
-    return;
-  }
-
-  // Win-percent scheduling (unchanged).
-  if (trySubmitPendingClaims(io, session, runtime, level, t, state)) {
-    return;
-  }
-  if (session.status !== 'calling') return;
-
-  state.lastBingoEvalCalledLen = calledLen;
-
-  for (const rt of runtime.values()) {
-    if (!robotIsDesignatedWinner(rt, designatedRobotId, runtime)) continue;
-    if (!isParticipatingRobot(session, rt)) continue;
-    if (rt.claimedForRound) continue;
-
-    syncRobotCartelsForRound(session, rt);
-    if (!rt.paidForRound) continue;
-    if (!rt.currentRoundCartels?.length) continue;
-
-    rt.targetWinBallCount = getRobotTargetWinBallCount(level, rt.robotId);
-    advanceRobotMarking(rt, session, level, t);
-
-    if (!robotDrawAssist.canRobotClaimNow(rt, calledLen, level)) continue;
-
-    for (const cartelId of rt.currentRoundCartels) {
-      if (!validateBingoClaim(cartelId, session.calledNumbers, {}, true)) continue;
-
-      if (declareRobotWinner(io, session, rt, cartelId, t)) {
-        return;
-      }
-    }
-  }
+  preWinInterceptor(io, session, cfg, runtime, state, {
+    source: 'ball_eval',
+    advantageLevel,
+  });
 }
 
 function markPaidRobotsIfStakesCharged(session, runtime, state, advantageLevel = 0) {
@@ -1073,4 +1102,5 @@ module.exports = {
   isRobotLobbyJoinDue,
   readSessionWinPercent,
   hasEnabledRobotsInRound,
+  preWinInterceptor,
 };

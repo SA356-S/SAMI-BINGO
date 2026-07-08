@@ -2,6 +2,10 @@ const { DepositModel } = require('../models/Deposit');
 const { mongoose } = require('../config/db');
 const { creditDepositAsync } = require('../socket/walletManager');
 const { recordTransaction } = require('./walletTransactionService');
+const {
+  resolveFirstDepositWalletCredit,
+  rollbackFirstDepositBonusClaim,
+} = require('./firstDepositBonusService');
 const { parseDepositMessage, parseBirrAmount } = require('./depositMessageParser');
 const { verifyTelebirr, verifyCbeBirr, isVerifierEnabled } = require('./verifierApiClient');
 const { getPaymentMethod } = require('../config/paymentMethods');
@@ -838,7 +842,10 @@ async function verifyAndApproveDeposit({
     return { ok: false, error: 'verification_failed' };
   }
 
-  const credit = await creditDepositAsync(uid, creditAmount, {
+  const bonusCredit = await resolveFirstDepositWalletCredit(uid, creditAmount);
+  const walletCreditAmount = bonusCredit.creditedAmount;
+
+  const credit = await creditDepositAsync(uid, walletCreditAmount, {
     depositId: String(deposit._id),
     transactionId: storeTxId,
     paymentMethod: parsed.paymentMethod,
@@ -847,6 +854,9 @@ async function verifyAndApproveDeposit({
   });
 
   if (!credit?.ok) {
+    if (bonusCredit.bonusApplied) {
+      await rollbackFirstDepositBonusClaim(uid);
+    }
     await DepositModel.updateOne(
       { _id: deposit._id, status: 'pending' },
       {
@@ -886,12 +896,28 @@ async function verifyAndApproveDeposit({
     /* non-blocking */
   }
 
+  if (bonusCredit.bonusApplied) {
+    try {
+      await recordTransaction(uid, {
+        type: 'deposit',
+        amount: bonusCredit.bonusAmount,
+        reference: storeTxId,
+        channel: 'FIRST_DEPOSIT_BONUS',
+        detail: `First deposit bonus ${bonusCredit.bonusPercent}%`,
+      });
+    } catch {
+      /* non-blocking */
+    }
+  }
+
   console.info('[botDeposit] approved via verifier-api', {
     userId: uid,
     transactionId: storeTxId,
     paymentMethod: parsed.paymentMethod,
     botReferenceAmount,
     verifiedAmount: creditAmount,
+    walletCreditAmount,
+    firstDepositBonus: bonusCredit.bonusApplied ? bonusCredit.bonusAmount : 0,
     amountSource: amountCheck.source,
     depositId: String(approved._id),
   });
@@ -908,8 +934,9 @@ async function verifyAndApproveDeposit({
 
   return {
     ok: true,
-    credited: creditAmount,
+    credited: walletCreditAmount,
     verifiedAmount: creditAmount,
+    firstDepositBonus: bonusCredit.bonusApplied ? bonusCredit.bonusAmount : 0,
     transactionId: storeTxId,
     depositId: String(approved._id),
   };
