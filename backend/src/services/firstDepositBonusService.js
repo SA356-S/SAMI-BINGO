@@ -16,19 +16,55 @@ function computeBonusAmount(depositAmount, percent) {
   return deposit * (pct / 100);
 }
 
+function isBonusGloballyDisabled() {
+  const settings = settingsService.getFirstDepositBonusSettingsSync();
+  if (!settings.firstDepositBonusEnabled) return true;
+  const pct = Number(settings.firstDepositBonusPercent);
+  return !Number.isFinite(pct) || pct <= 0;
+}
+
+function markBonusClaimed(userId) {
+  const key = String(userId || '').trim();
+  if (key) memoryBonusClaimed.add(key);
+}
+
+async function hasFirstDepositBonusBeenClaimed(userId) {
+  const key = String(userId || '').trim();
+  if (!key) return true;
+  if (memoryBonusClaimed.has(key)) return true;
+
+  if (!isDbReady()) return false;
+
+  const profile = await UserProfileModel.findOne(
+    { userId: key },
+    { firstDepositBonusClaimed: 1 }
+  ).lean();
+  if (profile?.firstDepositBonusClaimed) {
+    memoryBonusClaimed.add(key);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Fast gate: return false when bonus logic must not run (already claimed or disabled).
+ */
+async function shouldAttemptFirstDepositBonus(userId) {
+  if (isBonusGloballyDisabled()) return false;
+  return !(await hasFirstDepositBonusBeenClaimed(userId));
+}
+
 async function tryClaimFirstDepositBonus(userId) {
   const key = String(userId || '').trim();
   if (!key) return { ok: false, skipped: 'invalid_user' };
 
-  const settings = await settingsService.getFirstDepositBonusSettings();
-  if (!settings.firstDepositBonusEnabled) {
+  if (isBonusGloballyDisabled()) {
     return { ok: false, skipped: 'disabled' };
   }
 
-  const pct = Number(settings.firstDepositBonusPercent);
-  if (!Number.isFinite(pct) || pct <= 0) {
-    return { ok: false, skipped: 'zero_percent' };
-  }
+  const pct = Number(
+    settingsService.getFirstDepositBonusSettingsSync().firstDepositBonusPercent
+  );
 
   if (isDbReady()) {
     const claimed = await UserProfileModel.findOneAndUpdate(
@@ -37,6 +73,7 @@ async function tryClaimFirstDepositBonus(userId) {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
     if (!claimed) {
+      markBonusClaimed(key);
       return { ok: false, skipped: 'already_claimed' };
     }
   } else if (memoryBonusClaimed.has(key)) {
@@ -52,13 +89,13 @@ async function rollbackFirstDepositBonusClaim(userId) {
   const key = String(userId || '').trim();
   if (!key) return;
 
+  memoryBonusClaimed.delete(key);
+
   if (isDbReady()) {
     await UserProfileModel.findOneAndUpdate(
       { userId: key },
       { $set: { firstDepositBonusClaimed: false } }
     );
-  } else {
-    memoryBonusClaimed.delete(key);
   }
 }
 
@@ -77,17 +114,16 @@ async function resolveFirstDepositWalletCredit(userId, depositAmount) {
     bonusPercent: 0,
   };
 
-  const settings = await settingsService.getFirstDepositBonusSettings();
-  if (!settings.firstDepositBonusEnabled) return base;
-
-  const pct = Number(settings.firstDepositBonusPercent);
-  if (!Number.isFinite(pct) || pct <= 0) return base;
-
+  const pct = Number(
+    settingsService.getFirstDepositBonusSettingsSync().firstDepositBonusPercent
+  );
   const bonusAmount = computeBonusAmount(deposit, pct);
   if (bonusAmount <= 0) return base;
 
   const claim = await tryClaimFirstDepositBonus(userId);
   if (!claim.ok) return base;
+
+  markBonusClaimed(userId);
 
   return {
     creditedAmount: deposit + bonusAmount,
@@ -98,6 +134,7 @@ async function resolveFirstDepositWalletCredit(userId, depositAmount) {
 }
 
 module.exports = {
+  shouldAttemptFirstDepositBonus,
   resolveFirstDepositWalletCredit,
   rollbackFirstDepositBonusClaim,
 };

@@ -3,6 +3,7 @@ const { mongoose } = require('../config/db');
 const { creditDepositAsync } = require('../socket/walletManager');
 const { recordTransaction } = require('./walletTransactionService');
 const {
+  shouldAttemptFirstDepositBonus,
   resolveFirstDepositWalletCredit,
   rollbackFirstDepositBonusClaim,
 } = require('./firstDepositBonusService');
@@ -842,8 +843,18 @@ async function verifyAndApproveDeposit({
     return { ok: false, error: 'verification_failed' };
   }
 
-  const bonusCredit = await resolveFirstDepositWalletCredit(uid, creditAmount);
-  const walletCreditAmount = bonusCredit.creditedAmount;
+  let walletCreditAmount = creditAmount;
+  let bonusCredit = {
+    creditedAmount: creditAmount,
+    bonusAmount: 0,
+    bonusApplied: false,
+    bonusPercent: 0,
+  };
+
+  if (await shouldAttemptFirstDepositBonus(uid)) {
+    bonusCredit = await resolveFirstDepositWalletCredit(uid, creditAmount);
+    walletCreditAmount = bonusCredit.creditedAmount;
+  }
 
   const credit = await creditDepositAsync(uid, walletCreditAmount, {
     depositId: String(deposit._id),
