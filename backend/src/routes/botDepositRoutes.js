@@ -1,5 +1,8 @@
 const express = require('express');
-const { verifyAndApproveDeposit } = require('../services/botDepositService');
+const {
+  verifyAndCreditDeposit,
+  getDepositErrorMessage,
+} = require('../services/depositVerificationService');
 
 const router = express.Router();
 
@@ -7,43 +10,45 @@ const VERIFY_SECRET = process.env.BOT_DEPOSIT_VERIFY_SECRET || '';
 
 /**
  * POST /bot/deposit/verify
- * Bot deposit verification + safe auto-approval.
+ * Optional HTTP entry for the Telegram bot. Uses the same qbirr verification service
+ * as the Mini App. Prefer in-process verifyAndCreditDeposit from depositHandler.
  */
 router.post('/deposit/verify', async (req, res) => {
   try {
     if (VERIFY_SECRET) {
       const provided =
-        req.headers['x-bot-deposit-secret'] ||
-        req.headers['x-bot-secret'] ||
-        '';
+        req.headers['x-bot-deposit-secret'] || req.headers['x-bot-secret'] || '';
       if (String(provided) !== String(VERIFY_SECRET)) {
         return res.status(401).json({ ok: false, error: 'unauthorized' });
       }
     }
 
-    const {
-      userId,
-      paymentMethod,
-      rawProofText,
-      message,
-    } = req.body || {};
-
-    const result = await verifyAndApproveDeposit({
-      userId,
-      rawProofText: rawProofText || message,
-      paymentMethod: paymentMethod || 'telebirr',
+    const body = req.body || {};
+    const result = await verifyAndCreditDeposit({
+      userId: body.userId,
+      provider: body.provider || body.paymentMethod,
+      reference: body.reference || body.transactionId || body.ref,
+      amount: body.amount || body.submittedAmount,
+      receivingNumber: body.receivingNumber || body.number,
+      source: 'bot',
     });
 
     if (!result.ok) {
-      return res.status(400).json(result);
+      const status = result.error === 'transaction_already_processed' ? 409 : 400;
+      return res.status(status).json({
+        ok: false,
+        error: result.error,
+        message: getDepositErrorMessage(result.error, 'am'),
+      });
     }
 
     return res.json(result);
   } catch (err) {
     console.error('[botDeposit] verify error:', err?.message || err);
-    res.status(500).json({ ok: false, error: 'deposit_verification_failed' });
+    res.status(500).json({ ok: false, error: 'verification_failed' });
   }
 });
 
-module.exports = router;
+router.verifyAndCreditDeposit = verifyAndCreditDeposit;
 
+module.exports = router;

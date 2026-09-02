@@ -52,7 +52,7 @@ export default function ScreenHeader({
         {isHome ? (
           <>
             <span className="truncate text-sm font-bold tracking-[0.14em] text-white/90 sm:text-base sm:tracking-[0.18em]">
-              EDIL BINGO
+              CAPITAL BINGO
             </span>
             <button
               type="button"

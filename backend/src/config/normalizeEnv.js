@@ -15,8 +15,8 @@ function normalizeEnv() {
     process.env.MONGO_URI = process.env.MONGODB_URI;
   }
 
-  if (!String(process.env.VERIFIER_API_URL || '').trim()) {
-    process.env.VERIFIER_API_URL = 'http://196.189.51.146:3002';
+  if (!String(process.env.QBIRR_BASE_URL || '').trim()) {
+    process.env.QBIRR_BASE_URL = 'https://verify.qbirr.com';
   }
 }
 

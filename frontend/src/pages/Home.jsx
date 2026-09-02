@@ -137,7 +137,7 @@ export default function Home({ activeScreen, onNavigate }) {
             Welcome to
           </span>
           <span className="mt-0.5 block bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 bg-clip-text text-transparent">
-            EDIL BINGO
+            CAPITAL BINGO
           </span>
         </h1>
       </section>

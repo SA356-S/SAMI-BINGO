@@ -4,6 +4,7 @@ import Home from './pages/Home';
 import Rules from './pages/Rules';
 import History from './pages/History';
 import Wallet from './pages/Wallet';
+import Deposit from './pages/Deposit';
 import Profile from './pages/Profile';
 import Score from './pages/score';
 
@@ -13,6 +14,7 @@ const SCREENS = {
   scores: Score,
   history: History,
   wallet: Wallet,
+  deposit: Deposit,
   profile: Profile,
 };
 

@@ -62,6 +62,8 @@ class GameSession {
     this._ballCallPending = false;
     /** Prevents concurrent startCalling from stacking intervals / invalidating tokens */
     this._ballCallerStarting = false;
+    this._startInFlight = false;
+    this._dailyProfitRecorded = false;
     this.winner = null;
     /** Prevents duplicate winner broadcasts / double prize paths */
     this._winnerLocked = false;
@@ -858,20 +860,65 @@ class GameSession {
   }
 
   /**
-   * Draw and broadcast the next ball (alias: callNextBall).
-   * @param {import('socket.io').Server} io
+   * After the latest ball is recorded, check seated human cartelas with the
+   * existing win-pattern validator and declareWinner path. Robots keep their
+   * own ball-eval interceptor; this only fills the missing human auto-detect.
    */
+  tryDeclareHumanBingoAfterBall(io) {
+    if (!io) return;
+    if (this.status !== 'calling' || this.resetTimer) return;
+    if (this._winnerLocked || this.winner) return;
+
+    const { validateBingoClaim } = require('../utils/bingoWin');
+
+    for (const player of this.allSeatedPlayers()) {
+      if (String(player.socketId || '').startsWith('robot-sock:')) continue;
+      if (String(player.userId || '').startsWith('robot:')) continue;
+
+      const automatic = player.automatic !== false;
+      for (const rawId of player.cartelIds || []) {
+        const cartelId = Number(rawId);
+        if (!Number.isInteger(cartelId) || cartelId < 1) continue;
+
+        const marks =
+          player.manualMarks?.[String(cartelId)] ??
+          player.manualMarks?.[cartelId] ??
+          [];
+        if (!validateBingoClaim(cartelId, this.calledNumbers, marks, automatic)) {
+          continue;
+        }
+
+        const result = this.declareWinner(io, {
+          socketId: player.socketId,
+          cartelId,
+          primaryCartelId: cartelId,
+          playerName: player.playerName,
+          userId: player.userId,
+        });
+        if (result && typeof result.then === 'function') {
+          void result.catch((err) => {
+            console.warn(
+              '[game] human bingo declareWinner failed',
+              err?.message || err
+            );
+          });
+        }
+        return;
+      }
+    }
+  }
+
   callNextBall(io, token = null) {
     // Never allow stale intervals to keep emitting after a new loop starts.
     if (token != null && this._drawLoopToken !== token) return;
     if (this.status !== 'calling' || this.resetTimer) return;
+    if (this._winnerLocked || this.winner) return;
     if (this._ballCallInFlight) {
-      this._ballCallPending = true;
+      // Do not queue a catch-up draw. The interval is the only cadence.
       return;
     }
     this._ballCallInFlight = true;
     try {
-
     const calledSet = new Set(this.calledNumbers);
     const next = bingoBall.drawNextBall(calledSet);
 
@@ -883,6 +930,15 @@ class GameSession {
       );
       console.log(`[game] all balls called gameId=${this.gameId}`);
       this.finishRoundWithoutWinner(io);
+      return;
+    }
+
+    if (calledSet.has(next) || this.calledNumbers.includes(next)) {
+      console.warn('[bingo-draw] duplicate pick rejected', {
+        gameId: this.gameId,
+        number: next,
+        calledCount: this.calledNumbers.length,
+      });
       return;
     }
 
@@ -918,6 +974,14 @@ class GameSession {
     io.to(this.roomName).emit('newNumber', payload);
     this._emitBallCalledAudio(io, payload);
 
+    if (this.status === 'calling' && !this.resetTimer && !this._winnerLocked && !this.winner) {
+      try {
+        this.tryDeclareHumanBingoAfterBall(io);
+      } catch (err) {
+        console.warn('[game] human bingo eval failed', err?.message || err);
+      }
+    }
+
     const sessionRef = this;
     const drawnNumber = next;
     runDeferred(() => {
@@ -937,14 +1001,7 @@ class GameSession {
     }
     } finally {
       this._ballCallInFlight = false;
-      if (this._ballCallPending) {
-        this._ballCallPending = false;
-        setImmediate(() => {
-          if (this.status === 'calling' && !this.resetTimer) {
-            this.callNextBall(io, token);
-          }
-        });
-      }
+      this._ballCallPending = false;
     }
   }
 
@@ -1537,6 +1594,11 @@ class GameSession {
       clearInterval(this.drawTimer);
       this.drawTimer = null;
     }
+    this._ballCallInFlight = false;
+    this._ballCallPending = false;
+    this._ballCallerStarting = false;
+    this._startInFlight = false;
+    this._dailyProfitRecorded = false;
     this.calledNumbers = [];
     this.ballSequence = 0;
     this._lastBallEmitSequence = 0;
@@ -1551,6 +1613,11 @@ class GameSession {
     this.prizePool = 0;
     this.clearAllPlayerSelections();
     gameManager.clearSessionUserMappings(this.gameId);
+    try {
+      require('../services/robotDrawAssist').clearRoundPlan(this.gameId);
+    } catch {
+      /* optional */
+    }
     this.restartLobbyCountdownLoop('reset_for_new_round_after_winner');
   }
 

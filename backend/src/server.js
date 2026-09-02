@@ -21,6 +21,7 @@ const settingsRoutes = require('./routes/settingsRoutes');
 const robotsRoutes = require('./routes/robotsRoutes');
 const userRoutes = require('./routes/userRoutes');
 const botDepositRoutes = require('./routes/botDepositRoutes');
+const depositRoutes = require('./routes/depositRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const { setAdminIo } = require('./services/adminService');
 const { registerSocketHandlers } = require('./socket');
@@ -31,7 +32,6 @@ const settingsService = require('./services/settingsService');
 const robotManagementService = require('./services/robotManagementService');
 const {
   mountMonorepoStatic,
-  startVerifierApiProcess,
   startTelegramBots,
   shutdownMonorepoServices,
   REPO_ROOT,
@@ -58,6 +58,11 @@ const io = new Server(server, {
   },
   pingInterval: 25000,
   pingTimeout: 20000,
+  connectTimeout: 20000,
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 120000,
+    skipMiddlewares: true,
+  },
   perMessageDeflate: {
     threshold: 1024,
   },
@@ -118,6 +123,7 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/robots', robotsRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/deposits', depositRoutes);
 app.use('/bot', botDepositRoutes);
 
 mountMonorepoStatic(app);
@@ -141,6 +147,12 @@ async function start() {
   } catch (err) {
     console.warn('[db] WithdrawRequest index sync failed:', err?.message || err);
   }
+  try {
+    const { DepositModel } = require('./models/Deposit');
+    await DepositModel.syncIndexes();
+  } catch (err) {
+    console.warn('[db] Deposit index sync failed:', err?.message || err);
+  }
   await hydrateWalletCacheFromDb();
   await robotConfigService.getConfig();
   await settingsService.getSettings();
@@ -161,8 +173,14 @@ async function start() {
     console.log(`Server running on port ${PORT}`);
     console.log(`[server] CORS origins: ${FRONTEND_ORIGINS.join(', ')}`);
     console.log(`[server] Lobby game id: ${gameManager.getLobbySession().gameId}`);
-    startVerifierApiProcess();
     void startTelegramBots();
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    console.error('[server] unhandledRejection', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[server] uncaughtException', err);
   });
 
   const shutdown = async () => {

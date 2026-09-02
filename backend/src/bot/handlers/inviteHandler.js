@@ -6,7 +6,7 @@ const {
   getReferralStats,
 } = require('../../services/referralService');
 
-const INVITE_HEADER = '🔗 Invite your friends to Dil Bingo and earn rewards!';
+const INVITE_HEADER = '🔗 Invite your friends to Capital Bingo and earn rewards!';
 
 function formatInviteMessage(referralLink, totalInvited) {
   const lines = [INVITE_HEADER, '', `🎁 ${referralLink}`];
@@ -17,7 +17,7 @@ function formatInviteMessage(referralLink, totalInvited) {
 }
 
 function buildShareUrl(referralLink) {
-  const text = encodeURIComponent('🔗 Join Dil Bingo and play with me!');
+  const text = encodeURIComponent('🔗 Join Capital Bingo and play with me!');
   const url = encodeURIComponent(referralLink);
   return `https://t.me/share/url?url=${url}&text=${text}`;
 }

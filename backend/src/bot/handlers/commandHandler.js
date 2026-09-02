@@ -8,7 +8,7 @@ const { findByTelegramId, isRegistered } = require('../../services/telegramUserS
 const { beginRegistration } = require('./registerHandler');
 
 const HELP_MESSAGE = [
-  '📖 Edil Bingo Bot Help',
+  '📖 Capital Bingo Bot Help',
   '',
   '/start — Open the bot',
   '/register — Register your phone number',

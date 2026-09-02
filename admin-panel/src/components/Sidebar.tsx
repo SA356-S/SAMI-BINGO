@@ -31,7 +31,7 @@ export default function Sidebar() {
     <aside className="flex w-72 shrink-0 flex-col border-r border-panel-border bg-[#0b0f1a] p-4">
       <div className="mb-5">
         <p className="text-sm font-bold tracking-wide text-white/90">
-          EDIL BINGO • ADMIN
+          CAPITAL BINGO • ADMIN
         </p>
         <p className="mt-1 text-xs text-slate-400">
           Role: <span className="uppercase text-indigo-200">{role ?? '—'}</span>

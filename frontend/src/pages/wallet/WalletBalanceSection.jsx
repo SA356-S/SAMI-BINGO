@@ -44,6 +44,7 @@ export default function WalletBalanceSection({
   playWallet,
   totalAvailable,
   loading,
+  onDeposit,
 }) {
   const mainDisplay = loading ? '…' : mainWallet;
   const playDisplay = loading ? '…' : playWallet;
@@ -65,6 +66,16 @@ export default function WalletBalanceSection({
           <span className="ml-1 text-sm font-semibold text-slate-200">ETB</span>
         </p>
       </div>
+
+      {typeof onDeposit === 'function' ? (
+        <button
+          type="button"
+          onClick={onDeposit}
+          className="w-full rounded-2xl border border-emerald-400/25 bg-emerald-500/15 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-200"
+        >
+          Deposit
+        </button>
+      ) : null}
     </section>
   );
 }

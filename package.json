@@ -7,8 +7,7 @@
   "workspaces": [
     "backend",
     "frontend",
-    "admin-panel",
-    "verifier-api"
+    "admin-panel"
   ],
   "engines": {
     "node": ">=18"
@@ -20,7 +19,7 @@
     "build": "node scripts/build-monorepo.js",
     "build:frontend": "npm run build --prefix frontend",
     "build:admin": "npm run build --prefix admin-panel",
-    "build:verifier": "npm run build --prefix verifier-api",
+    "test": "npm test --prefix backend",
     "backend": "npm run start --prefix backend",
     "bot": "node backend/src/bot.js",
     "withdraw-bot": "node withdrawBot.js",

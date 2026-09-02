@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 const express = require('express');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
@@ -8,25 +7,12 @@ const REPO_ROOT = path.resolve(__dirname, '../../..');
 /** Public URL path for the admin panel SPA (not the /api/admin API prefix). */
 const ADMIN_PANEL_PATH = '/SHULKETE100';
 
-/** @type {import('child_process').ChildProcess | null} */
-let verifierProcess = null;
-
 function repoPath(...segments) {
   return path.join(REPO_ROOT, ...segments);
 }
 
-function distExists(relativePath) {
-  return fs.existsSync(repoPath(relativePath));
-}
-
 function shouldServeStatic() {
   return process.env.SERVE_MONOREPO_STATIC !== 'false';
-}
-
-function shouldStartVerifier() {
-  if (process.env.START_VERIFIER_API === 'false') return false;
-  if (process.env.DISABLE_VERIFIER_API === 'true') return false;
-  return distExists('verifier-api/dist/index.js');
 }
 
 function mountMonorepoStatic(app) {
@@ -96,43 +82,6 @@ function expressStatic(rootDir, options = {}) {
   });
 }
 
-function startVerifierApiProcess() {
-  if (!shouldStartVerifier()) {
-    if (process.env.START_VERIFIER_API !== 'false') {
-      console.warn(
-        '[monorepo] verifier-api dist not found — build with npm run build:verifier or set START_VERIFIER_API=false'
-      );
-    }
-    return;
-  }
-
-  const entry = repoPath('verifier-api', 'dist', 'index.js');
-  const port = String(process.env.VERIFIER_API_PORT || '3002');
-
-  verifierProcess = spawn(process.execPath, [entry], {
-    cwd: repoPath('verifier-api'),
-    env: {
-      ...process.env,
-      PORT: port,
-      NODE_ENV: process.env.NODE_ENV || 'production',
-    },
-    stdio: 'inherit',
-  });
-
-  verifierProcess.on('error', (err) => {
-    console.warn('[monorepo] verifier-api process error:', err?.message || err);
-  });
-
-  verifierProcess.on('exit', (code, signal) => {
-    if (code !== 0 && code !== null) {
-      console.warn(`[monorepo] verifier-api exited (code=${code}, signal=${signal})`);
-    }
-    verifierProcess = null;
-  });
-
-  console.log(`[monorepo] verifier-api started on port ${port}`);
-}
-
 function startTelegramBots() {
   if (process.env.DISABLE_TELEGRAM_BOTS === 'true') {
     console.log('[monorepo] Telegram bots disabled (DISABLE_TELEGRAM_BOTS=true)');
@@ -153,20 +102,16 @@ function startTelegramBots() {
 
 function startMonorepoServices(app) {
   mountMonorepoStatic(app);
-  startVerifierApiProcess();
   startTelegramBots();
 }
 
 function shutdownMonorepoServices() {
-  if (verifierProcess && !verifierProcess.killed) {
-    verifierProcess.kill('SIGTERM');
-  }
+  /* bots are stopped with the process */
 }
 
 module.exports = {
   mountMonorepoStatic,
   startMonorepoServices,
-  startVerifierApiProcess,
   startTelegramBots,
   shutdownMonorepoServices,
   REPO_ROOT,

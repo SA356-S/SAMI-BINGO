@@ -1,3 +1,8 @@
+const dns = require('dns');
+
+// Atlas SRV lookups fail when Node uses a broken local resolver (127.0.0.1).
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+
 const mongoose = require('mongoose');
 
 function getMongoUri() {

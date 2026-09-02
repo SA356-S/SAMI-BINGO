@@ -507,16 +507,28 @@ function getRobotVisibleCalledNumbers(session, rt) {
 function declareRobotWinner(io, session, rt, cartelId, t) {
   if (session._winnerLocked || session.winner) return false;
 
-  const winnerPayload = session.declareWinner(io, {
-    socketId: rt.pseudoSocketId,
-    cartelId,
-    primaryCartelId: cartelId,
-    playerName: rt.displayName,
-    winners: undefined,
-    _preWinAuthorized: true,
-  });
+  let winnerPayload;
+  try {
+    winnerPayload = session.declareWinner(io, {
+      socketId: rt.pseudoSocketId,
+      cartelId,
+      primaryCartelId: cartelId,
+      playerName: rt.displayName,
+      winners: undefined,
+      _preWinAuthorized: true,
+    });
+  } catch (err) {
+    console.warn('[robots] declareWinner threw', err?.message || err);
+    return false;
+  }
 
-  if (!winnerPayload) return false;
+  if (winnerPayload && typeof winnerPayload.then === 'function') {
+    void winnerPayload.catch((err) => {
+      console.warn('[robots] declareWinner rejected', err?.message || err);
+    });
+  } else if (!winnerPayload) {
+    return false;
+  }
 
   rt.claimedForRound = true;
   rt.pendingClaim = null;

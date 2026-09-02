@@ -19,16 +19,6 @@ function run(label, command, extraEnv = {}) {
   });
 }
 
-function tryRun(label, command, extraEnv = {}) {
-  try {
-    run(label, command, extraEnv);
-    return true;
-  } catch (err) {
-    console.warn(`[build] ${label} failed (continuing):`, err?.message || err);
-    return false;
-  }
-}
-
 function viteAvailable() {
   const isWin = process.platform === 'win32';
   const binName = isWin ? 'vite.cmd' : 'vite';
@@ -66,7 +56,6 @@ try {
 
   console.log('[build] production build — workspace deps only, no nested npm install');
 
-  tryRun('verifier-api build', 'npm run build -w verifier-api');
   run('frontend build', 'npm run build -w frontend');
   run('admin-panel build', 'npm run build -w admin-panel', {
     VITE_BASE_PATH: process.env.VITE_BASE_PATH || '/SHULKETE100/',

@@ -1,12 +1,20 @@
+const fs = require('fs');
+const path = require('path');
 const { Markup } = require('telegraf');
 const { handleWithdrawText } = require('./withdrawHandler');
 const { message } = require('telegraf/filters');
-const { getEnabledPaymentMethods, getPaymentMethod } = require('../../config/paymentMethods');
-
-/** Lazy load — avoids pulling walletManager/game stack during bot startup. */
-function depositService() {
-  return require('../../services/botDepositService');
-}
+const {
+  getRotatedTelebirrAccount,
+  findTelebirrAccount,
+  getPublicDepositMethods,
+} = require('../../config/depositAccounts');
+const {
+  verifyAndCreditDeposit,
+  getDepositRejectionMessage,
+  formatDepositSuccessMessage,
+  extractTelebirrReference,
+} = require('../../services/depositVerificationService');
+const { SUPPORT_CONTACTS } = require('./supportHandler');
 
 const DEPOSIT_STATE_TTL_MS = 30 * 60 * 1000;
 const depositState = new Map();
@@ -42,41 +50,97 @@ function pruneExpiredStates() {
 }
 
 function getMethodKeyboard() {
-  const methods = getEnabledPaymentMethods();
-  const rows = methods.map((m) => [
-    Markup.button.callback(m.label, `deposit:method:${m.name}`),
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('🔴 Telebirr', 'deposit:method:telebirr'),
+      Markup.button.callback('🔴 CBEBirr', 'deposit:method:cbe'),
+    ],
   ]);
-  if (rows.length === 0) {
-    return Markup.inlineKeyboard([
-      [Markup.button.callback('Telebirr', 'deposit:method:telebirr')],
-    ]);
-  }
-  return Markup.inlineKeyboard(rows);
 }
 
-function formatInstructions(method) {
-  const phone = method.phoneNumber || 'N/A';
-  const name = method.accountName || 'N/A';
-  const isCbe = String(method.name).toLowerCase().includes('cbe');
+function supportHandle() {
+  return SUPPORT_CONTACTS[0]?.label || '@Edil_bingo';
+}
 
+function formatDepositChooser() {
   return [
-    `💰 ${method.label} ተቀማጭ`,
+    '<b>💳 Deposit / Top-Up</b>',
     '',
-    `👤 ስም: ${name}`,
-    `📱 ስልክ: ${phone}`,
-    '',
-    '1️⃣ ወደ ከላይ ያለውን አካውንት ይክፈሉ።',
-    '2️⃣ የተቀበሏትን ሙሉ የክፍያ SMS (አንድ መልእክት) ይለጥፉ።',
-    '',
-    isCbe
-      ? 'በSMS ውስጥ ካለ receipt/transaction number እና የስልክ ቁጥርዎን ያካትቱ።'
-      : 'Transaction Number እና ከTelebirr የተላከው receipt linkን ያካትቱ።',
-    '',
-    '⚠️ ሂሳብ መቀመጥ የሚያደርገው የተረጋገጠው የክፍያ መጠን ብቻ ነው (play wallet)።',
+    'Please choose your preferred payment method below:',
   ].join('\n');
 }
 
-/** Shared deposit entry — inline button and /deposit command. */
+function formatTelebirrInstructions(account) {
+  const number = account.displayNumber || account.number;
+  return [
+    '<b>🏦 Telebirr Deposit</b>',
+    `<b>Account:</b> <code>${number}</code>`,
+    '',
+    '<b>📱 Telebirr Deposit Steps</b>',
+    '1️⃣ ከላይ ባለው የ Telebirr አካውንት ገንዘቡን ያስገቡ።',
+    '2️⃣ ክፍያ ካደረጉ በኋላ የ Telebirr የጽሁፍ መልእክት (SMS) ይደርስዎታል፡፡',
+    '3️⃣ የደረሳችሁን SMS ሙሉ በሙሉ ኮፒ በማድረግ በዚህ ቻት ፔስት አድርጉ፡፡',
+    '',
+    `💬 የክፍያ ችግር ካለ፣ ${supportHandle()} ይጠቀሙ፡፡`,
+    '',
+    '------------------------------',
+    '📩 After sending payment, please paste the SMS confirmation below 👇',
+    'You can paste multiple times if needed.',
+  ].join('\n');
+}
+
+function formatCbeInstructions(cbe) {
+  const accountLine = cbe.account
+    ? `<b>Account:</b> <code>${cbe.account}</code>`
+    : '';
+  const numberLine = cbe.number ? `<b>Number:</b> <code>${cbe.number}</code>` : '';
+  return [
+    '<b>🏦 CBE Birr Deposit</b>',
+    accountLine,
+    numberLine,
+    cbe.receiverName ? `<b>Name:</b> ${cbe.receiverName}` : '',
+    '',
+    '<b>📱 CBE Birr Deposit Steps</b>',
+    '1️⃣ ከላይ ባለው የ CBE Birr አካውንት ገንዘቡን ያስገቡ።',
+    '2️⃣ ክፍያ ካደረጉ በኋላ የግብይት ቁጥር ይደርስዎታል፡፡',
+    '3️⃣ የግብይት / Transaction ቁጥርዎን እዚህ ይላኩ።',
+    '',
+    `💬 የክፍያ ችግር ካለ፣ ${supportHandle()} ይጠቀሙ፡፡`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function instructionPhotoPath(provider) {
+  const names =
+    provider === 'cbe'
+      ? ['deposit-cbebirr.jpg', 'deposit-cbebirr.png', 'deposit-cbe.jpg', 'deposit-cbe.png']
+      : ['deposit-telebirr.jpg', 'deposit-telebirr.png'];
+  const dirs = [
+    path.join(__dirname, '../assets'),
+    path.join(__dirname, '../../../public/uploads'),
+  ];
+  for (const dir of dirs) {
+    for (const name of names) {
+      const full = path.join(dir, name);
+      if (fs.existsSync(full)) return full;
+    }
+  }
+  return null;
+}
+
+async function sendInstructions(ctx, provider, caption) {
+  const photo = instructionPhotoPath(provider);
+  if (photo) {
+    await ctx.replyWithPhoto(
+      { source: photo },
+      { caption, parse_mode: 'HTML' }
+    );
+    return;
+  }
+  await ctx.reply(caption, { parse_mode: 'HTML' });
+}
+
 async function beginDeposit(ctx) {
   const userId = ctx.from?.id;
   if (!userId) return;
@@ -89,8 +153,11 @@ async function beginDeposit(ctx) {
     /* optional */
   }
   clearState(userId);
-  setState(userId, { step: 'await_amount', amount: null, paymentMethod: null });
-  await ctx.reply('💰 የተቀማጭ ገንዘብ መጠን በ ETB ያስገቡ (ቁጥር ብቻ)። ለምሳሌ፡ 50');
+  setState(userId, { step: 'await_method', amount: null, provider: null, receivingNumber: null });
+  await ctx.reply(formatDepositChooser(), {
+    parse_mode: 'HTML',
+    ...getMethodKeyboard(),
+  });
 }
 
 async function startDeposit(ctx) {
@@ -100,19 +167,26 @@ async function startDeposit(ctx) {
 
 async function handleAmountText(ctx) {
   const userId = ctx.from?.id;
-  if (!userId) return;
+  if (!userId) return false;
 
   const s = getState(userId);
-  if (!s || s.step !== 'await_amount') return;
+  if (!s || s.step !== 'await_amount' || !s.provider) return false;
 
   const n = Number(String(ctx.message?.text || '').trim().replace(/,/g, ''));
   if (!Number.isFinite(n) || n <= 0) {
     await ctx.reply('እባክዎ ትክክለኛ መጠን ያስገቡ (ለምሳሌ 50)።');
-    return;
+    return true;
   }
 
-  setState(userId, { step: 'await_method', amount: n, paymentMethod: null });
-  await ctx.reply(`መጠን: ${n} ETB\n\nየክፍያ አማራጭ ይምረጡ፡`, getMethodKeyboard());
+  setState(userId, {
+    ...s,
+    step: 'await_reference',
+    amount: n,
+  });
+  await ctx.reply(
+    `መጠን: ${n} ETB\n\nክፍያውን ከፈጸሙ በኋላ የግብይት / Transaction ቁጥር ያስገቡ።`
+  );
+  return true;
 }
 
 async function chooseMethod(ctx, methodKey) {
@@ -120,56 +194,150 @@ async function chooseMethod(ctx, methodKey) {
   if (!userId) return;
 
   const s = getState(userId);
-  if (!s || s.step !== 'await_method' || !s.amount) {
+  if (!s || s.step !== 'await_method') {
     clearState(userId);
     await ctx.reply('እንደገና ለመጀመር Deposit ቁልፍን ይንኩ።');
     return;
   }
 
-  const cfg = getPaymentMethod(methodKey);
   await ctx.answerCbQuery().catch(() => {});
+  const methods = getPublicDepositMethods();
+
+  if (methodKey === 'telebirr') {
+    if (!methods.telebirr.enabled) {
+      await ctx.reply('Telebirr ተቀማጭ አሁን አልተዋቀረም።');
+      return;
+    }
+    const account = getRotatedTelebirrAccount();
+    if (!account) {
+      await ctx.reply('Telebirr ተቀማጭ አሁን አልተዋቀረም።');
+      return;
+    }
+    setState(userId, {
+      step: 'await_receipt',
+      amount: null,
+      provider: 'telebirr',
+      receivingNumber: account.displayNumber || account.number,
+    });
+    await sendInstructions(ctx, 'telebirr', formatTelebirrInstructions(account));
+    return;
+  }
+
+  if (!methods.cbe.enabled) {
+    await ctx.reply('CBE Birr ተቀማጭ አሁን አልተዋቀረም።');
+    return;
+  }
+
   setState(userId, {
-    step: 'await_proof',
-    amount: s.amount,
-    paymentMethod: cfg.name,
+    step: 'await_amount',
+    amount: null,
+    provider: 'cbe',
+    receivingNumber: methods.cbe.number,
   });
-  await ctx.reply(formatInstructions(cfg));
+  await sendInstructions(ctx, 'cbe', formatCbeInstructions(methods.cbe));
+  await ctx.reply('💰 የተቀማጭ ገንዘብ መጠን በ ETB ያስገቡ (ቁጥር ብቻ)። ለምሳሌ፡ 50');
 }
 
-async function handleProofText(ctx) {
+async function chooseTelebirrNumber(ctx, numberKey) {
   const userId = ctx.from?.id;
   if (!userId) return;
 
   const s = getState(userId);
-  if (!s || s.step !== 'await_proof') return;
-
-  const text = ctx.message?.text || '';
-  if (!text || text.trim().length < 10) {
-    await ctx.reply('ከTelebirr ወይም CBE Birr የተቀበሏትን ሙሉ SMS ይለጥፉ።');
+  if (!s || (s.step !== 'await_telebirr_number' && s.step !== 'await_method')) {
+    clearState(userId);
+    await ctx.reply('እንደገና ለመጀመር Deposit ቁልፍን ይንኩ።');
     return;
+  }
+
+  await ctx.answerCbQuery().catch(() => {});
+  const account = findTelebirrAccount(numberKey);
+  if (!account) {
+    await ctx.reply('ይህ የTelebirr ቁጥር አልተዋቀረም።');
+    return;
+  }
+
+  setState(userId, {
+    step: 'await_receipt',
+    amount: null,
+    provider: 'telebirr',
+    receivingNumber: account.displayNumber || account.number,
+  });
+  await sendInstructions(ctx, 'telebirr', formatTelebirrInstructions(account));
+}
+
+async function handleReceiptText(ctx) {
+  const userId = ctx.from?.id;
+  if (!userId) return false;
+
+  const s = getState(userId);
+  if (!s || s.step !== 'await_receipt' || s.provider !== 'telebirr') return false;
+
+  const raw = String(ctx.message?.text || '').trim();
+  const reference = extractTelebirrReference(raw);
+  if (!reference || reference.length < 4) {
+    await ctx.reply('እባክዎ የTelebirr SMS / receipt መልእክት ሙሉ በሙሉ ይለጥፉ።');
+    return true;
   }
 
   await ctx.reply('⏳ ክፍያ በማረጋገጥ ላይ…');
 
-  const { verifyAndApproveDeposit, getDepositRejectionMessage, formatDepositSuccessMessage } =
-    depositService();
-
-  const result = await verifyAndApproveDeposit({
+  const result = await verifyAndCreditDeposit({
     userId: String(userId),
-    rawProofText: text,
-    paymentMethod: s.paymentMethod,
-    /** Bot UI amount — stored for reference only; approval uses verifier API amount. */
-    submittedAmount: Number(s.amount),
+    provider: 'telebirr',
+    reference: raw,
+    receivingNumber: s.receivingNumber,
+    source: 'bot',
+  });
+
+  if (!result.ok && result.error === 'invalid_amount') {
+    await ctx.reply('እባክዎ መጠኑ የሚታይበትን ሙሉ የTelebirr SMS ይለጥፉ።');
+    return true;
+  }
+
+  clearState(userId);
+
+  if (!result.ok) {
+    await ctx.reply(getDepositRejectionMessage(result.error));
+    return true;
+  }
+
+  await ctx.reply(formatDepositSuccessMessage(result));
+  return true;
+}
+
+async function handleReferenceText(ctx) {
+  const userId = ctx.from?.id;
+  if (!userId) return false;
+
+  const s = getState(userId);
+  if (!s || s.step !== 'await_reference') return false;
+
+  const reference = String(ctx.message?.text || '').trim();
+  if (!reference || reference.length < 4) {
+    await ctx.reply('እባክዎ የግብይት / Transaction ቁጥር ያስገቡ።');
+    return true;
+  }
+
+  await ctx.reply('⏳ ክፍያ በማረጋገጥ ላይ…');
+
+  const result = await verifyAndCreditDeposit({
+    userId: String(userId),
+    provider: s.provider,
+    reference,
+    amount: Number(s.amount),
+    receivingNumber: s.receivingNumber,
+    source: 'bot',
   });
 
   clearState(userId);
 
   if (!result.ok) {
     await ctx.reply(getDepositRejectionMessage(result.error));
-    return;
+    return true;
   }
 
   await ctx.reply(formatDepositSuccessMessage(result));
+  return true;
 }
 
 async function handleDepositCommand(ctx) {
@@ -184,6 +352,9 @@ function registerDepositHandlers(bot) {
   bot.action('menu:deposit', (ctx) => startDeposit(ctx));
   bot.action('deposit:method:telebirr', (ctx) => chooseMethod(ctx, 'telebirr'));
   bot.action('deposit:method:cbe', (ctx) => chooseMethod(ctx, 'cbe'));
+  bot.action(/^deposit:telebirr:(.+)$/, (ctx) =>
+    chooseTelebirrNumber(ctx, ctx.match[1])
+  );
 
   bot.on(message('text'), async (ctx, next) => {
     if (isSlashCommandMessage(ctx)) {
@@ -193,8 +364,13 @@ function registerDepositHandlers(bot) {
     const withdrawHandled = await handleWithdrawText(ctx).catch(() => false);
     if (withdrawHandled) return;
 
-    await handleAmountText(ctx).catch(() => {});
-    await handleProofText(ctx).catch(() => {});
+    const amountHandled = await handleAmountText(ctx).catch(() => false);
+    if (amountHandled) return;
+
+    const receiptHandled = await handleReceiptText(ctx).catch(() => false);
+    if (receiptHandled) return;
+
+    await handleReferenceText(ctx).catch(() => {});
   });
 }
 
@@ -204,4 +380,6 @@ module.exports = {
   handleDepositCommand,
   startDeposit,
   beginDeposit,
+  verifyAndCreditDeposit,
+  getRotatedTelebirrAccount,
 };

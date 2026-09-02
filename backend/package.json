@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "bot": "node src/bot.js",
+    "test": "node --test tests/*.test.js",
     "purge-robots": "node scripts/purgeRobots.js"
   },
   "dependencies": {

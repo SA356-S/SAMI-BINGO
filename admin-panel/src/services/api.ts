@@ -39,8 +39,8 @@ export {
   subscribeAdminReady,
 } from './adminClient';
 
-/** Broadcast sends to every Telegram user server-side before responding. */
-const BROADCAST_REQUEST_TIMEOUT_MS = 120_000;
+/** Image upload can be large; send start returns immediately (sending runs in background). */
+const BROADCAST_REQUEST_TIMEOUT_MS = 30_000;
 
 export function getApiErrorMessage(error: unknown, fallback: string) {
   if (axios.isAxiosError(error)) {
@@ -199,6 +199,20 @@ export async function fetchRobotAdvantageSettings() {
   return data;
 }
 
+export type BroadcastJobSnapshot = {
+  ok: boolean;
+  jobId?: string;
+  status?: 'sending' | 'completed' | 'failed';
+  channel?: string;
+  recipients?: number;
+  sent?: number;
+  failed?: number;
+  remaining?: number;
+  failedChatIds?: { chatId: number; error?: string; message?: string }[];
+  error?: string;
+  message?: string;
+};
+
 export async function uploadBroadcastImage(imageBase64: string, mimeType?: string) {
   await assertAdminClientReady();
   try {
@@ -227,23 +241,28 @@ export async function broadcastNotification(payload: {
 }) {
   await assertAdminClientReady();
   try {
-    const { data } = await api.post<{
-      ok: boolean;
-      channel?: string;
-      recipients?: number;
-      sent?: number;
-      failed?: number;
-      failedChatIds?: { chatId: number; error?: string; message?: string }[];
-      error?: string;
-      message?: string;
-    }>('/notifications/broadcast', payload, {
-      timeout: BROADCAST_REQUEST_TIMEOUT_MS,
-    });
+    const { data } = await api.post<BroadcastJobSnapshot>(
+      '/notifications/broadcast',
+      payload,
+      { timeout: 20000 }
+    );
     return data;
   } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 409) {
+      return error.response.data as BroadcastJobSnapshot;
+    }
     logAdminApiFailure('broadcast_send', error);
     throw error;
   }
+}
+
+export async function fetchBroadcastStatus(jobId?: string) {
+  await assertAdminClientReady();
+  const { data } = await api.get<BroadcastJobSnapshot>('/notifications/broadcast/status', {
+    params: jobId ? { jobId } : {},
+    timeout: 8000,
+  });
+  return data;
 }
 
 export async function updateRobotAdvantageSettings(robotAdvantageLevel: number) {

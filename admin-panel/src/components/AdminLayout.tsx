@@ -20,7 +20,7 @@ export default function AdminLayout() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
                 <h1 className="truncate text-lg font-bold tracking-wide text-white/90">
-                  EDIL BINGO Admin Dashboard
+                  CAPITAL BINGO Admin Dashboard
                 </h1>
                 <p className="mt-1 text-xs text-slate-400">
                   Game: {game?.gameId ? game.gameId : '—'} • Status:{' '}

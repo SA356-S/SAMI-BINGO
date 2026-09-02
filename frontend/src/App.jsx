@@ -30,6 +30,9 @@ import { initTelegramWebApp, isTelegramWebApp } from './api/playerIdentity';
 
 
 
+/** One-time cold-start Home landing — must not re-run after PLAY 10 navigation. */
+let entryRouteNormalized = false;
+
 function LobbySessionBridge() {
 
   const navigate = useNavigate();
@@ -37,6 +40,13 @@ function LobbySessionBridge() {
 
 
   useEffect(() => {
+    if (!entryRouteNormalized) {
+      entryRouteNormalized = true;
+      const path = window.location.pathname;
+      if (!path.startsWith('/instruction') && path !== '/') {
+        navigate('/', { replace: true });
+      }
+    }
 
     initLobbySession(navigate);
 
@@ -160,7 +170,7 @@ export default function App() {
 
           <p className="mt-2 text-sm text-white/50">
 
-            Open this game from the EDIL BINGO Telegram bot (Play button).
+            Open this game from the CAPITAL BINGO Telegram bot (Play button).
 
           </p>
 

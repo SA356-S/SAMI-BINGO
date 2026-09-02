@@ -269,6 +269,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('game:join', async (payload = {}, ack) => {
+      try {
       const {
         gameId,
         cartelIds = [],
@@ -388,10 +389,17 @@ function registerSocketHandlers(io) {
             };
         ack(ackPayload);
       }
+      } catch (err) {
+        console.error('[socket] game:join failed', err);
+        if (typeof ack === 'function') {
+          ack({ ok: false, error: 'join_failed' });
+        }
+      }
     });
 
     /** Timer reached 0 — charge entry fees and begin ball loop */
     socket.on('game:round-start', (payload = {}, ack) => {
+      try {
       const gameId = payload.gameId || socket.data.gameId;
       const session = gameManager.resolveGameplaySession(gameId);
 
@@ -504,6 +512,12 @@ function registerSocketHandlers(io) {
       const state = session.toPublicState(socket.id);
       if (typeof ack === 'function') {
         ack({ ok: true, status: 'calling', ...state, ...startResult });
+      }
+      } catch (err) {
+        console.error('[socket] game:round-start failed', err);
+        if (typeof ack === 'function') {
+          ack({ ok: false, error: 'round_start_failed' });
+        }
       }
     });
 
@@ -797,7 +811,7 @@ function registerSocketHandlers(io) {
 
     socket.on('game:bingo', async (payload = {}, ack) => {
       const gameId = payload.gameId || socket.data.gameId;
-      const session = gameManager.getSession(gameId);
+      const session = gameManager.resolveGameplaySession(gameId);
 
       if (!session) {
         const err = { ok: false, error: 'Game not found' };
@@ -829,7 +843,9 @@ function registerSocketHandlers(io) {
         return;
       }
 
-      const player = session.players.get(socket.id);
+      const player =
+        session.players.get(socket.id) ||
+        session.getPlayerByUserId(payload.userId || socket.data.userId);
       if (!player?.cartelIds?.includes(cartelId)) {
         const err = { ok: false, error: 'No Bingo' };
         if (typeof ack === 'function') ack(err);
@@ -845,7 +861,7 @@ function registerSocketHandlers(io) {
         cartelId,
         session.calledNumbers,
         cartelMarks,
-        player.automatic
+        player.automatic !== false
       );
 
       if (!isValid) {
@@ -856,13 +872,21 @@ function registerSocketHandlers(io) {
 
       const primaryCartelId = cartelId;
 
-      const winnerPayload = await session.declareWinner(io, {
-        socketId: socket.id,
-        cartelId: primaryCartelId,
-        primaryCartelId,
-        playerName: payload.playerName || socket.data.playerName,
-        winners: payload.winners,
-      });
+      let winnerPayload;
+      try {
+        winnerPayload = await session.declareWinner(io, {
+          socketId: socket.id,
+          cartelId: primaryCartelId,
+          primaryCartelId,
+          playerName: payload.playerName || socket.data.playerName,
+          winners: payload.winners,
+        });
+      } catch (err) {
+        console.error('[socket] game:bingo declareWinner failed', err);
+        const fail = { ok: false, error: 'Bingo claim failed' };
+        if (typeof ack === 'function') ack(fail);
+        return;
+      }
 
       if (!winnerPayload) {
         const err = { ok: false, error: 'No Bingo' };
@@ -1065,50 +1089,62 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('game:marks-update', (payload = {}) => {
-      const gameId = payload.gameId || socket.data.gameId;
-      const session = gameManager.getSession(gameId);
-      if (!session) return;
+      try {
+        const gameId = payload.gameId || socket.data.gameId;
+        const session = gameManager.resolveGameplaySession(gameId);
+        if (!session) return;
 
-      const userId = resolveUserId(socket, payload);
-      session.updatePlayerMarks(userId, payload.manualMarks, payload.automatic);
+        const userId = resolveUserId(socket, payload);
+        session.updatePlayerMarks(userId, payload.manualMarks, payload.automatic);
+      } catch (err) {
+        console.warn('[socket] game:marks-update failed', err?.message || err);
+      }
+    });
+
+    socket.on('error', (err) => {
+      console.warn('[socket] client error', socket.id, err?.message || err);
     });
 
     socket.on('disconnect', () => {
-      const gameId = socket.data.gameId;
-      if (!gameId) return;
+      try {
+        const gameId = socket.data.gameId;
+        if (!gameId) return;
 
-      const session = gameManager.getSession(gameId);
-      if (!session) return;
+        const session = gameManager.getSession(gameId);
+        if (!session) return;
 
-      const userId = socket.data.userId;
-      const inProgress =
-        session.status === 'calling' ||
-        (session.status === 'ended' && session.resetTimer);
+        const userId = socket.data.userId;
+        const inProgress =
+          session.status === 'calling' ||
+          (session.status === 'ended' && session.resetTimer);
 
-      if (inProgress) {
-        const away = session.markPlayerAway(socket.id);
-        if (away?.userId) {
-          gameManager.setUserGame(away.userId, session.gameId);
-        }
-      } else if (session.status === 'waiting') {
-        const seated = session.players.get(socket.id);
-        if (seated?.cartelIds?.length) {
-          session.markPlayerAway(socket.id);
+        if (inProgress) {
+          const away = session.markPlayerAway(socket.id);
+          if (away?.userId) {
+            gameManager.setUserGame(away.userId, session.gameId);
+          }
+        } else if (session.status === 'waiting') {
+          const seated = session.players.get(socket.id);
+          if (seated?.cartelIds?.length) {
+            session.markPlayerAway(socket.id);
+          } else {
+            session.removePlayer(socket.id);
+            if (userId) gameManager.clearUserGame(userId);
+          }
         } else {
           session.removePlayer(socket.id);
           if (userId) gameManager.clearUserGame(userId);
         }
-      } else {
-        session.removePlayer(socket.id);
-        if (userId) gameManager.clearUserGame(userId);
+
+        runDeferred(() => {
+          emitRoomPlayersChurn(session);
+          emitRoomGameUpdate(session, { lightweight: true });
+        });
+
+        console.log(`[socket] disconnected ${socket.id} from ${gameId}`);
+      } catch (err) {
+        console.warn('[socket] disconnect handler failed', err?.message || err);
       }
-
-      runDeferred(() => {
-        emitRoomPlayersChurn(session);
-        emitRoomGameUpdate(session, { lightweight: true });
-      });
-
-      console.log(`[socket] disconnected ${socket.id} from ${gameId}`);
     });
   });
 }

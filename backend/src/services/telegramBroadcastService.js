@@ -5,12 +5,22 @@ const { mongoose } = require('../config/db');
 const { TelegramUserModel } = require('../models/TelegramUser');
 const { getMiniAppUrl } = require('../config/miniAppUrl');
 
-const SEND_DELAY_MS = Number(process.env.TELEGRAM_BROADCAST_DELAY_MS) || 40;
 const MAX_RETRIES = Number(process.env.TELEGRAM_BROADCAST_RETRIES) || 3;
-const { yieldEventLoop } = require('../utils/eventLoopDefer');
+const CONCURRENCY = Math.max(
+  1,
+  Math.min(30, Number(process.env.TELEGRAM_BROADCAST_CONCURRENCY) || 18)
+);
+const RATE_PER_SEC = Math.max(
+  1,
+  Math.min(30, Number(process.env.TELEGRAM_BROADCAST_RATE_PER_SEC) || 25)
+);
 
 /** @type {import('telegraf').Telegram | null} */
 let telegramApi = null;
+
+let floodResumeAt = 0;
+let rateTokens = RATE_PER_SEC;
+let rateLastAt = Date.now();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -108,6 +118,48 @@ function retryAfterMs(err) {
   return 2000;
 }
 
+function noteFloodWait(ms) {
+  const until = Date.now() + Math.max(0, Number(ms) || 0);
+  if (until > floodResumeAt) floodResumeAt = until;
+}
+
+async function waitForFloodWindow() {
+  const wait = floodResumeAt - Date.now();
+  if (wait > 0) await sleep(wait);
+}
+
+async function takeSendSlot() {
+  await waitForFloodWindow();
+  while (true) {
+    await waitForFloodWindow();
+    const now = Date.now();
+    const elapsed = (now - rateLastAt) / 1000;
+    rateTokens = Math.min(RATE_PER_SEC, rateTokens + elapsed * RATE_PER_SEC);
+    rateLastAt = now;
+    if (rateTokens >= 1) {
+      rateTokens -= 1;
+      return;
+    }
+    const waitMs = Math.ceil(((1 - rateTokens) / RATE_PER_SEC) * 1000);
+    await sleep(Math.max(20, waitMs));
+  }
+}
+
+async function mapPool(items, limit, worker) {
+  let next = 0;
+  const n = Math.max(1, Math.min(limit, items.length || 1));
+  await Promise.all(
+    Array.from({ length: Math.min(n, items.length) }, async () => {
+      while (true) {
+        const i = next;
+        next += 1;
+        if (i >= items.length) return;
+        await worker(items[i], i);
+      }
+    })
+  );
+}
+
 async function sendTelegramPayload(chatId, payload, sendFn) {
   const api = getTelegramApi();
   if (!api) {
@@ -117,8 +169,9 @@ async function sendTelegramPayload(chatId, payload, sendFn) {
   let lastErr;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
     try {
-      await sendFn(api, chatId, payload);
-      return { ok: true };
+      await takeSendSlot();
+      const result = await sendFn(api, chatId, payload);
+      return { ok: true, result };
     } catch (err) {
       lastErr = err;
       const tg = getTelegramError(err);
@@ -129,7 +182,9 @@ async function sendTelegramPayload(chatId, payload, sendFn) {
         return { ok: false, error: 'bad_request', message: tg.description };
       }
       if (isRetryableTelegramError(err) && attempt < MAX_RETRIES) {
-        await sleep(retryAfterMs(err));
+        const wait = retryAfterMs(err);
+        noteFloodWait(wait);
+        await sleep(wait);
         continue;
       }
       break;
@@ -143,22 +198,33 @@ async function sendTelegramPayload(chatId, payload, sendFn) {
   };
 }
 
-async function sendBroadcastToChat(chatId, { imageUrl, message, buttonText, buttonLink }) {
+function photoFileIdFromMessage(msg) {
+  const photos = msg?.photo;
+  if (!Array.isArray(photos) || photos.length === 0) return null;
+  return photos[photos.length - 1]?.file_id || null;
+}
+
+async function sendBroadcastToChat(chatId, { imageUrl, message, buttonText, buttonLink, photoSource, onPhotoFileId }) {
   const caption = String(message || '').trim().slice(0, 1024);
   const reply_markup = buildReplyMarkup(buttonText, buttonLink);
-  const photo = resolvePhotoInput(imageUrl);
+  const photo = photoSource !== undefined ? photoSource : resolvePhotoInput(imageUrl);
 
   if (photo) {
     return sendTelegramPayload(chatId, { photo, caption, reply_markup }, async (api, id, p) => {
-      await api.sendPhoto(id, p.photo, {
+      const msg = await api.sendPhoto(id, p.photo, {
         caption: p.caption,
         reply_markup: p.reply_markup,
       });
+      const fileId = photoFileIdFromMessage(msg);
+      if (fileId && typeof onPhotoFileId === 'function') {
+        onPhotoFileId(fileId);
+      }
+      return msg;
     });
   }
 
   return sendTelegramPayload(chatId, { message: caption, reply_markup }, async (api, id, p) => {
-    await api.sendMessage(id, p.message, {
+    return api.sendMessage(id, p.message, {
       reply_markup: p.reply_markup,
       disable_web_page_preview: false,
     });
@@ -191,8 +257,12 @@ async function listBroadcastRecipients() {
 
 /**
  * Send admin broadcast to every Telegram user via Bot API (not Mini App / WebSocket).
+ * Concurrent workers + ~25 msg/s cap; 429 pauses all workers.
  */
-async function broadcastViaTelegramBot({ imageUrl, message, buttonText, buttonLink }) {
+async function broadcastViaTelegramBot(
+  { imageUrl, message, buttonText, buttonLink, recipients: presetRecipients },
+  { onProgress } = {}
+) {
   if (!getTelegramApi()) {
     return {
       ok: false,
@@ -201,7 +271,9 @@ async function broadcastViaTelegramBot({ imageUrl, message, buttonText, buttonLi
     };
   }
 
-  const recipients = await listBroadcastRecipients();
+  const recipients = Array.isArray(presetRecipients)
+    ? presetRecipients
+    : await listBroadcastRecipients();
   if (!recipients.length) {
     return {
       ok: false,
@@ -216,40 +288,62 @@ async function broadcastViaTelegramBot({ imageUrl, message, buttonText, buttonLi
     failedChatIds: [],
   };
 
-  for (const user of recipients) {
-    const result = await sendBroadcastToChat(user.chatId, {
+  let photoSource = resolvePhotoInput(imageUrl);
+  const emitProgress = () => {
+    if (typeof onProgress !== 'function') return;
+    onProgress({
+      recipients: recipients.length,
+      sent: results.sent,
+      failed: results.failed,
+      failedChatIds: results.failedChatIds,
+    });
+  };
+
+  emitProgress();
+
+  const sendOne = (user) =>
+    sendBroadcastToChat(user.chatId, {
       imageUrl,
       message,
       buttonText,
       buttonLink,
+      photoSource,
+      onPhotoFileId: (fileId) => {
+        photoSource = fileId;
+      },
+    }).then((result) => {
+      if (result.ok) {
+        results.sent += 1;
+      } else {
+        results.failed += 1;
+        results.failedChatIds.push({
+          chatId: user.chatId,
+          error: result.error,
+          message: result.message,
+        });
+        console.warn('[notifications] Telegram send failed', {
+          chatId: user.chatId,
+          error: result.error,
+          message: result.message,
+        });
+      }
+      emitProgress();
     });
 
-    if (result.ok) {
-      results.sent += 1;
-    } else {
-      results.failed += 1;
-      results.failedChatIds.push({
-        chatId: user.chatId,
-        error: result.error,
-        message: result.message,
-      });
-      console.warn('[notifications] Telegram send failed', {
-        chatId: user.chatId,
-        error: result.error,
-        message: result.message,
-      });
-    }
-
-    if (SEND_DELAY_MS > 0) {
-      await sleep(SEND_DELAY_MS);
-    }
-    await yieldEventLoop();
+  let remaining = recipients;
+  if (photoSource && recipients.length) {
+    await sendOne(recipients[0]);
+    remaining = recipients.slice(1);
   }
+
+  await mapPool(remaining, CONCURRENCY, sendOne);
 
   console.info('[notifications] Telegram bot broadcast finished', {
     total: recipients.length,
     sent: results.sent,
     failed: results.failed,
+    concurrency: CONCURRENCY,
+    ratePerSec: RATE_PER_SEC,
   });
 
   return {

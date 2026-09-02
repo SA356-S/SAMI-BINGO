@@ -243,6 +243,8 @@ export default function MainGame() {
   const isRejoinSession = Boolean(state?.rejoin) && !isWatchingOnly;
 
   const [mySocketId, setMySocketId] = useState(() => getSocket().id ?? null);
+  const mySocketIdRef = useRef(mySocketId);
+  mySocketIdRef.current = mySocketId;
   const [myCartels, setMyCartels] = useState(() => [...sessionCartelsRef.current]);
   const [cartelOwnership, setCartelOwnership] = useState({});
 
@@ -373,7 +375,9 @@ export default function MainGame() {
       setMySocketId,
       setMyCartels,
       setCartelOwnership,
-      mySocketId,
+      get mySocketId() {
+        return mySocketIdRef.current;
+      },
       setPlayersCount: (n) => {
         const count = Number(n);
         if (Number.isFinite(count) && count >= 0) setPlayersCount(count);
@@ -386,7 +390,7 @@ export default function MainGame() {
       setCartelGrids,
       setDerash: setServerDerash,
     }),
-    [mySocketId]
+    []
   );
 
   const syncFromServer = useCallback(
@@ -1196,13 +1200,10 @@ export default function MainGame() {
     }
 
     return () => {
-      invalidateGameSessionGeneration();
-      joinedRef.current = false;
-      sessionLiveRef.current = false;
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
-    socket.off('newNumber', onNumberCalled);
-    socket.off('game:update', onGameUpdate);
+      socket.off('newNumber', onNumberCalled);
+      socket.off('game:update', onGameUpdate);
       socket.off('game:players', onPlayers);
       socket.off('game:sync', onGameSync);
       socket.off('game:joined', onJoined);
@@ -1222,12 +1223,15 @@ export default function MainGame() {
     state?.watchingOnly,
     isRejoinSession,
     isWatchingOnly,
-    syncFromServer,
-    syncRejoinCalledBalls,
-    applyPendingWinner,
-    navigate,
     handleSessionInitResult,
   ]);
+
+  useEffect(
+    () => () => {
+      invalidateGameSessionGeneration();
+    },
+    []
+  );
 
   useEffect(() => {
     if (!isPlayer || ignoreGameUpdatesRef.current || gameWon) return undefined;

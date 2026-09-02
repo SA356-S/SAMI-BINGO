@@ -27,13 +27,20 @@ export function getSocket() {
   const auth = buildSocketAuth();
   const prevId = socketInstance?.io?.opts?.auth?.userId;
 
-  if (!socketInstance || (auth.userId && prevId !== auth.userId)) {
-    if (socketInstance) {
-      socketInstance.removeAllListeners();
-      socketInstance.disconnect();
-      socketInstance = null;
+  if (socketInstance && auth.userId && prevId !== auth.userId) {
+    socketInstance.auth = auth;
+    if (socketInstance.io?.opts) {
+      socketInstance.io.opts.auth = auth;
     }
+    console.log('[socket] updating auth', { userId: auth.userId, username: auth.username });
+    if (socketInstance.connected) {
+      socketInstance.disconnect();
+    }
+    socketInstance.connect();
+    return socketInstance;
+  }
 
+  if (!socketInstance) {
     if (!auth.userId) {
       console.warn('[socket] deferred — Telegram user id not available yet');
     } else {
@@ -45,6 +52,11 @@ export function getSocket() {
       autoConnect: Boolean(auth.userId),
       path: '/socket.io',
       auth,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 800,
+      reconnectionDelayMax: 8000,
+      timeout: 20000,
     });
 
     import('../services/lobbySession')

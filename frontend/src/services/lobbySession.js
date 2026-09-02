@@ -69,6 +69,17 @@ function releaseMainGameAutoEntryIfIdle() {
   }
 }
 
+function currentAppPath() {
+  if (typeof window === 'undefined') return '/';
+  return window.location.pathname.replace(/\/+$/, '') || '/';
+}
+
+/** Home (and instruction) must never auto-jump to Main Game on lobby sync. */
+function isStartupHomeRoute() {
+  const path = currentAppPath();
+  return path === '/' || path.startsWith('/instruction');
+}
+
 function maybeNavigateToMainGame() {
   if (!navigateRef) {
     logLobbyDiag('maybeNavigateToMainGame BLOCKED', { reason: 'no_navigate_ref' });
@@ -76,6 +87,10 @@ function maybeNavigateToMainGame() {
   }
   if (gameStartNavigateDone) {
     logLobbyDiag('maybeNavigateToMainGame BLOCKED', { reason: 'game_start_navigate_done' });
+    return;
+  }
+  if (isStartupHomeRoute()) {
+    logLobbyDiag('maybeNavigateToMainGame BLOCKED', { reason: 'startup_home_route' });
     return;
   }
   if (!canAutoNavigateToMainGame()) {

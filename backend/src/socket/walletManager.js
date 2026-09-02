@@ -587,80 +587,97 @@ function chargeAndStartSession(session, io, options = {}) {
     return result;
   }
 
-  const forceStart = options.forceStart === true;
-  const hasReadyCartels =
-    typeof target.hasMinimumCartelasToStart === 'function'
-      ? target.hasMinimumCartelasToStart()
-      : typeof target.getTotalSelectedCartelas === 'function'
-        ? target.getTotalSelectedCartelas() >= MIN_TOTAL_CARTELAS_TO_START
-        : (target.takenCartels?.size ?? 0) >= MIN_TOTAL_CARTELAS_TO_START;
-  const canStart = forceStart ? hasReadyCartels : target.canStartCalling();
-
-  if (!canStart) {
-    const result = { ok: false, error: 'Cannot start game yet' };
-    console.info('[lobby-diag] chargeAndStartSession RETURN', {
-      path: 'cannot_start_yet',
-      forceStart,
-      hasReadyCartels,
-      canStartCalling:
-        typeof target.canStartCalling === 'function' ? target.canStartCalling() : null,
-      result,
-      ...cartelaDiag,
-    });
-    return result;
-  }
-
-  const charge = chargeSessionEntryStakes(target, io);
-  if (!charge.ok) {
-    console.info('[lobby-diag] chargeAndStartSession RETURN', {
-      path: 'charge_session_entry_stakes_failed',
-      charge,
-      ...cartelaDiag,
-    });
-    return charge;
-  }
-
-  const started = target.startCalling(io, options);
-  if (!started?.ok) {
-    const result = { ok: false, error: started?.error ?? 'Failed to start ball caller' };
-    console.info('[lobby-diag] chargeAndStartSession RETURN', {
-      path: 'start_calling_failed',
-      started,
-      chargeOk: charge.ok,
-      result,
-      ...cartelaDiag,
-    });
-    return result;
-  }
-
-  // Prevent duplicate pool updates if multiple clients triggered "start" concurrently.
-  if (!started?.alreadyRunning) {
-    io.to(target.roomName).emit('game:pool-update', {
-      gameId: target.gameId,
+  if (target._startInFlight) {
+    return {
+      ok: true,
+      alreadyRunning: true,
+      alreadyCharged: target.stakesCharged,
       totalPool: target.totalPool,
       houseShare: target.houseShare,
-      derash: target.derash,
-      pot: target.derash,
-    });
+      prizePool: target.prizePool,
+      gameId: target.gameId,
+    };
   }
 
-  const result = {
-    ok: true,
-    ...charge,
-    gameId: target.gameId,
-    alreadyRunning: started?.alreadyRunning,
-  };
-  console.info('[lobby-diag] chargeAndStartSession RETURN', {
-    path: 'success',
-    result: {
-      ok: result.ok,
-      gameId: result.gameId,
-      alreadyRunning: result.alreadyRunning,
-      totalPool: result.totalPool,
-    },
-    ...cartelaDiag,
-  });
-  return result;
+  target._startInFlight = true;
+  try {
+    const forceStart = options.forceStart === true;
+    const hasReadyCartels =
+      typeof target.hasMinimumCartelasToStart === 'function'
+        ? target.hasMinimumCartelasToStart()
+        : typeof target.getTotalSelectedCartelas === 'function'
+          ? target.getTotalSelectedCartelas() >= MIN_TOTAL_CARTELAS_TO_START
+          : (target.takenCartels?.size ?? 0) >= MIN_TOTAL_CARTELAS_TO_START;
+    const canStart = forceStart ? hasReadyCartels : target.canStartCalling();
+
+    if (!canStart) {
+      const result = { ok: false, error: 'Cannot start game yet' };
+      console.info('[lobby-diag] chargeAndStartSession RETURN', {
+        path: 'cannot_start_yet',
+        forceStart,
+        hasReadyCartels,
+        canStartCalling:
+          typeof target.canStartCalling === 'function' ? target.canStartCalling() : null,
+        result,
+        ...cartelaDiag,
+      });
+      return result;
+    }
+
+    const charge = chargeSessionEntryStakes(target, io);
+    if (!charge.ok) {
+      console.info('[lobby-diag] chargeAndStartSession RETURN', {
+        path: 'charge_session_entry_stakes_failed',
+        charge,
+        ...cartelaDiag,
+      });
+      return charge;
+    }
+
+    const started = target.startCalling(io, options);
+    if (!started?.ok) {
+      const result = { ok: false, error: started?.error ?? 'Failed to start ball caller' };
+      console.info('[lobby-diag] chargeAndStartSession RETURN', {
+        path: 'start_calling_failed',
+        started,
+        chargeOk: charge.ok,
+        result,
+        ...cartelaDiag,
+      });
+      return result;
+    }
+
+    // Prevent duplicate pool updates if multiple clients triggered "start" concurrently.
+    if (!started?.alreadyRunning) {
+      io.to(target.roomName).emit('game:pool-update', {
+        gameId: target.gameId,
+        totalPool: target.totalPool,
+        houseShare: target.houseShare,
+        derash: target.derash,
+        pot: target.derash,
+      });
+    }
+
+    const result = {
+      ok: true,
+      ...charge,
+      gameId: target.gameId,
+      alreadyRunning: started?.alreadyRunning,
+    };
+    console.info('[lobby-diag] chargeAndStartSession RETURN', {
+      path: 'success',
+      result: {
+        ok: result.ok,
+        gameId: result.gameId,
+        alreadyRunning: result.alreadyRunning,
+        totalPool: result.totalPool,
+      },
+      ...cartelaDiag,
+    });
+    return result;
+  } finally {
+    target._startInFlight = false;
+  }
 }
 
 function emitWalletSnapshot(socket, wallet) {

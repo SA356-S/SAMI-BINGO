@@ -1,10 +1,12 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import PanelCard from '../components/PanelCard';
 import { useAdminReady } from '../hooks/useAdminReady';
 import {
   broadcastNotification,
+  fetchBroadcastStatus,
   getApiErrorMessage,
   uploadBroadcastImage,
+  type BroadcastJobSnapshot,
 } from '../services/api';
 
 function ActionButton({
@@ -54,10 +56,47 @@ export default function BroadcastPage() {
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+  const [job, setJob] = useState<BroadcastJobSnapshot | null>(null);
 
   const actionsReady = authReady && apiReady;
-  const busy = uploading || sending;
+  const jobSending = job?.status === 'sending';
+  const busy = uploading || sending || jobSending;
   const controlsDisabled = busy || !actionsReady;
+
+  useEffect(() => {
+    if (!job?.jobId || job.status !== 'sending') return undefined;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await fetchBroadcastStatus(job.jobId);
+        if (cancelled) return;
+        setJob(next);
+        if (next.status === 'completed') {
+          setStatus(
+            next.message ||
+              `Telegram bot: ${next.sent ?? 0} sent, ${next.failed ?? 0} failed (${next.recipients ?? 0} users)`
+          );
+        } else if (next.status === 'failed') {
+          setError(next.message || next.error || 'Broadcast failed');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(getApiErrorMessage(err, 'Could not refresh broadcast status'));
+        }
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 800);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [job?.jobId, job?.status]);
 
   const previewSrc = useMemo(() => imagePreview || imageUrl || '', [imagePreview, imageUrl]);
 
@@ -96,14 +135,17 @@ export default function BroadcastPage() {
         buttonText: buttonText.trim() || 'Play',
         buttonLink: buttonLink.trim() || '/card-selection',
       });
-      if (!result.ok) {
+      if (result.error === 'broadcast_in_progress' && result.jobId) {
+        setJob(result);
+        setError(result.message || 'A broadcast is already sending.');
+        return;
+      }
+      if (!result.ok && result.status !== 'sending') {
         setError(result.message || result.error || 'Broadcast failed');
         return;
       }
-      setStatus(
-        result.message ||
-          `Telegram bot: ${result.sent ?? 0} sent, ${result.failed ?? 0} failed (${result.recipients ?? 0} users)`
-      );
+      setJob(result);
+      setStatus(result.message || `Broadcast started — ${result.recipients ?? 0} recipient(s)`);
     } catch (err) {
       setError(getApiErrorMessage(err, 'Broadcast failed'));
     } finally {
@@ -209,10 +251,45 @@ export default function BroadcastPage() {
           {error ? <p className="text-sm font-semibold text-rose-300">{error}</p> : null}
           {status ? <p className="text-sm font-semibold text-emerald-300">{status}</p> : null}
 
+          {job ? (
+            <div className="grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-sm sm:grid-cols-5">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                  Status
+                </p>
+                <p className="mt-1 font-bold capitalize text-white">{job.status || '—'}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                  Recipients
+                </p>
+                <p className="mt-1 font-bold tabular-nums text-white">{job.recipients ?? 0}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                  Sent
+                </p>
+                <p className="mt-1 font-bold tabular-nums text-emerald-300">{job.sent ?? 0}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                  Failed
+                </p>
+                <p className="mt-1 font-bold tabular-nums text-rose-300">{job.failed ?? 0}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                  Remaining
+                </p>
+                <p className="mt-1 font-bold tabular-nums text-indigo-200">{job.remaining ?? 0}</p>
+              </div>
+            </div>
+          ) : null}
+
           <ActionButton
             label={
-              sending
-                ? 'Sending…'
+              jobSending || sending
+                ? 'Broadcasting…'
                 : uploading
                   ? 'Uploading image…'
                   : actionsReady

@@ -4,7 +4,7 @@ const { GAME_ENTRY_STAKE } = require('../config/constants');
 
 const SHARE_CONTACT_LABEL = '📞 Share contact';
 
-const WELCOME_MESSAGE = '👋 Welcome back to Edil Bingo!';
+const WELCOME_MESSAGE = '👋 Welcome back to Capital Bingo!';
 
 const PLAY_STAKE_MESSAGE = 'Choose your stake to play';
 

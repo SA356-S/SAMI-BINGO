@@ -74,6 +74,7 @@ export default function Wallet({ activeScreen, onNavigate }) {
           playWallet={playWallet}
           totalAvailable={totalAvailable}
           loading={loading}
+          onDeposit={() => onNavigate('deposit')}
         />
 
         <section className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -104,7 +105,7 @@ export default function Wallet({ activeScreen, onNavigate }) {
         </section>
 
         <p className="shrink-0 py-2 text-center text-[9px] font-medium uppercase leading-snug tracking-[0.12em] text-slate-500">
-          MANAGE YOUR FUNDS IN THE TELEGRAM BOT CHAT
+          Deposits use Telebirr or CBE Birr and credit this wallet
         </p>
       </div>
 
