@@ -90,31 +90,33 @@ function formatTelebirrInstructions(account) {
   ].join('\n');
 }
 
+function cbeDisplayAccount(cbe) {
+  return cbe?.number || cbe?.account || '';
+}
+
 function formatCbeInstructions(cbe) {
-  const accountValue = cbe.account || cbe.number;
-  const numberLine =
-    cbe.number && cbe.number !== accountValue
-      ? `<b>Number:</b> <code>${cbe.number}</code>`
-      : '';
-  return [
-    '<b>🏦 CBE Birr Deposit</b>',
-    accountValue ? `<b>Account:</b> <code>${accountValue}</code>` : '',
-    numberLine,
-    cbe.receiverName ? `<b>Name:</b> ${cbe.receiverName}` : '',
+  const accountValue = cbeDisplayAccount(cbe);
+  const lines = [
+    '<b>🏦 CBEBirr Deposit</b>',
+    `<b>Account:</b> <code>${accountValue}</code>`,
+  ];
+  if (cbe?.receiverName) {
+    lines.push(`<b>Name:</b> ${cbe.receiverName}`);
+  }
+  lines.push(
     '',
-    '<b>📱 CBE Birr Deposit Steps</b>',
-    '1️⃣ ከላይ ባለው የ CBE Birr አካውንት ገንዘቡን ያስገቡ።',
-    '2️⃣ ክፍያ ካደረጉ በኋላ የ CBE Birr የጽሁፍ መልእክት (SMS) ይደርስዎታል፡፡',
+    '<b>📱 CBEBirr Deposit Steps</b>',
+    '1️⃣ ከላይ ባለው የ CBEBirr አካውንት ገንዘቡን ያስገቡ።',
+    '2️⃣ ክፍያ ካደረጉ በኋላ የ CBEBirr የጽሁፍ መልእክት (SMS) ይደርስዎታል፡፡',
     '3️⃣ የደረሳችሁን SMS ሙሉ በሙሉ ኮፒ በማድረግ በዚህ ቻት ፔስት አድርጉ፡፡',
     '',
     `💬 የክፍያ ችግር ካለ፣ ${supportHandle()} ይጠቀሙ፡፡`,
     '',
     '------------------------------',
     '📩 After sending payment, please paste the SMS confirmation below 👇',
-    'You can paste multiple times if needed.',
-  ]
-    .filter(Boolean)
-    .join('\n');
+    'You can paste multiple times if needed.'
+  );
+  return lines.join('\n');
 }
 
 function instructionPhotoPath(provider) {
@@ -238,7 +240,7 @@ async function chooseMethod(ctx, methodKey) {
     step: 'await_receipt',
     amount: null,
     provider: 'cbe',
-    receivingNumber: methods.cbe.number || methods.cbe.account,
+    receivingNumber: cbeDisplayAccount(methods.cbe),
   });
   await sendInstructions(ctx, 'cbe', formatCbeInstructions(methods.cbe));
 }
@@ -397,4 +399,7 @@ module.exports = {
   beginDeposit,
   verifyAndCreditDeposit,
   getRotatedTelebirrAccount,
+  formatCbeInstructions,
+  formatDepositChooser,
+  cbeDisplayAccount,
 };

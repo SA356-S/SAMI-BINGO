@@ -83,14 +83,41 @@ function findTelebirrAccount(selectedNumber) {
 }
 
 function getCbeConfig() {
-  const number = pick(process.env.DEPOSIT_CBEBIRR_NUMBER);
-  const receiverName = pick(process.env.DEPOSIT_CBEBIRR_RECEIVER_NAME);
-  const receiverAccount = pick(process.env.DEPOSIT_CBEBIRR_ACCOUNT);
+  const mapped = parseTelebirrAccounts(
+    process.env.DEPOSIT_CBEBIRR_ACCOUNTS || process.env.DEPOSIT_CBE_ACCOUNTS || ''
+  );
+  const mappedAccount = [...mapped.values()][0] || null;
+  const number = pick(
+    process.env.DEPOSIT_CBEBIRR_NUMBER,
+    process.env.DEPOSIT_CBE_NUMBER,
+    process.env.DEPOSIT_CBE_BIRR_NUMBER,
+    process.env.CBEBIRR_NUMBER,
+    process.env.CBE_NUMBER,
+    process.env.CBE_PHONE,
+    mappedAccount?.displayNumber,
+    mappedAccount?.number
+  );
+  const receiverName = pick(
+    process.env.DEPOSIT_CBEBIRR_RECEIVER_NAME,
+    process.env.DEPOSIT_CBE_RECEIVER_NAME,
+    process.env.DEPOSIT_CBE_NAME,
+    process.env.CBEBIRR_RECEIVER_NAME,
+    process.env.CBE_RECEIVER_NAME,
+    process.env.CBE_NAME,
+    mappedAccount?.receiverName
+  );
+  const receiverAccount = pick(
+    process.env.DEPOSIT_CBEBIRR_ACCOUNT,
+    process.env.DEPOSIT_CBE_ACCOUNT,
+    process.env.DEPOSIT_CBE_BIRR_ACCOUNT,
+    process.env.CBEBIRR_ACCOUNT,
+    process.env.CBE_ACCOUNT
+  );
   return {
     number,
     receiverName,
     receiverAccount,
-    configured: Boolean(receiverName && (receiverAccount || number)),
+    configured: Boolean((number || receiverAccount) && receiverName),
   };
 }
 
@@ -163,7 +190,7 @@ function getPublicDepositMethods() {
     },
     cbe: {
       provider: CBE_PROVIDER,
-      label: 'CBE Birr',
+      label: 'CBEBirr',
       enabled: cbe.configured,
       number: cbe.number,
       receiverName: cbe.receiverName,

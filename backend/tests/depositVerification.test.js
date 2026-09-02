@@ -527,3 +527,25 @@ test('missing QBIRR_API_KEY returns deposit_not_configured without calling qbirr
   assert.equal(result.error, 'deposit_not_configured');
   assert.equal(called, false);
 });
+
+test('CBEBirr instruction card matches the deposit reference layout', () => {
+  const { formatCbeInstructions, formatDepositChooser } = require('../src/bot/handlers/depositHandler');
+  const chooser = formatDepositChooser();
+  assert.match(chooser, /Deposit \/ Top-Up/);
+  assert.match(chooser, /Please choose your preferred payment method below:/);
+
+  const text = formatCbeInstructions({
+    number: '0904165498',
+    account: '1000017692643',
+    receiverName: 'CAPITAL BINGO',
+  });
+  assert.match(text, /🏦 CBEBirr Deposit/);
+  assert.match(text, /Account:/);
+  assert.match(text, /0904165498/);
+  assert.match(text, /📱 CBEBirr Deposit Steps/);
+  assert.match(text, /የ CBEBirr አካውንት/);
+  assert.match(text, /paste the SMS confirmation below/);
+  assert.match(text, /Name:/);
+  assert.match(text, /CAPITAL BINGO/);
+  assert.doesNotMatch(text, /Number:/);
+});

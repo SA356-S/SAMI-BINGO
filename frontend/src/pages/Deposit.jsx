@@ -3,9 +3,13 @@ import Navbar from '../components/Navbar';
 import { fetchDepositMethods, submitDeposit } from '../api/deposit';
 
 const PROVIDERS = [
-  { id: 'telebirr', label: 'Telebirr' },
-  { id: 'cbe', label: 'CBE Birr' },
+  { id: 'telebirr', label: '🔴 Telebirr' },
+  { id: 'cbe', label: '🔴 CBEBirr' },
 ];
+
+function cbeDisplayAccount(cbe) {
+  return cbe?.number || cbe?.account || '';
+}
 
 export default function Deposit({ activeScreen, onNavigate }) {
   const [methods, setMethods] = useState(null);
@@ -40,12 +44,13 @@ export default function Deposit({ activeScreen, onNavigate }) {
 
   const telebirrAccounts = methods?.telebirr?.accounts || [];
   const cbe = methods?.cbe;
+  const cbeAccount = cbeDisplayAccount(cbe);
 
   const payTo = useMemo(() => {
     if (provider === 'cbe') {
       return {
         name: cbe?.receiverName || '—',
-        number: cbe?.number || '—',
+        number: cbeAccount || '—',
         account: cbe?.account || '',
       };
     }
@@ -57,24 +62,36 @@ export default function Deposit({ activeScreen, onNavigate }) {
       number: selected?.number || '—',
       account: '',
     };
-  }, [provider, cbe, telebirrAccounts, receivingNumber]);
+  }, [provider, cbe, cbeAccount, telebirrAccounts, receivingNumber]);
 
   async function handleSubmit(event) {
     event.preventDefault();
     setError('');
     setSuccess(null);
 
-    const parsedAmount = Number(String(amount).replace(/,/g, '').trim());
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      setError('Enter a valid amount.');
-      return;
-    }
     if (!String(reference).trim()) {
-      setError('Enter the transaction / reference number.');
+      setError(
+        provider === 'cbe'
+          ? 'Paste the CBEBirr SMS confirmation.'
+          : 'Enter the transaction / reference number.'
+      );
       return;
     }
-    if (provider === 'telebirr' && !receivingNumber) {
-      setError('Select a Telebirr receiving number.');
+
+    if (provider === 'telebirr') {
+      const parsedAmount = Number(String(amount).replace(/,/g, '').trim());
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        setError('Enter a valid amount.');
+        return;
+      }
+      if (!receivingNumber) {
+        setError('Select a Telebirr receiving number.');
+        return;
+      }
+    }
+
+    if (provider === 'cbe' && !cbe?.enabled) {
+      setError('CBEBirr deposits are not configured.');
       return;
     }
 
@@ -82,9 +99,9 @@ export default function Deposit({ activeScreen, onNavigate }) {
     try {
       const result = await submitDeposit({
         provider,
-        receivingNumber: provider === 'telebirr' ? receivingNumber : undefined,
+        receivingNumber: provider === 'telebirr' ? receivingNumber : cbeAccount,
         reference: String(reference).trim(),
-        amount: parsedAmount,
+        amount: provider === 'cbe' ? undefined : Number(String(amount).replace(/,/g, '').trim()),
       });
       setSuccess(result);
       setReference('');
@@ -127,28 +144,29 @@ export default function Deposit({ activeScreen, onNavigate }) {
           </p>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-3 pb-4">
-            <section className="rounded-2xl border border-white/[0.08] bg-[#12151f] p-3">
-              <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                Payment method
+            <section className="rounded-2xl border border-white/[0.08] bg-[#1c1c1e] p-3">
+              <p className="mb-1 text-sm font-bold text-white">💳 Deposit / Top-Up</p>
+              <p className="mb-3 text-sm text-slate-300">
+                Please choose your preferred payment method below:
               </p>
               <div className="grid grid-cols-2 gap-2">
                 {PROVIDERS.map((item) => {
-                  const enabled =
-                    item.id === 'telebirr'
-                      ? methods?.telebirr?.enabled !== false
-                      : methods?.cbe?.enabled !== false;
                   const active = provider === item.id;
                   return (
                     <button
                       key={item.id}
                       type="button"
-                      disabled={!enabled}
-                      onClick={() => setProvider(item.id)}
-                      className={`rounded-xl border px-3 py-2.5 text-xs font-bold uppercase tracking-[0.12em] ${
+                      onClick={() => {
+                        setProvider(item.id);
+                        setError('');
+                        setSuccess(null);
+                        setReference('');
+                      }}
+                      className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${
                         active
-                          ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-                          : 'border-white/10 bg-white/[0.03] text-slate-300'
-                      } disabled:opacity-40`}
+                          ? 'bg-[#2c2c2e] text-white'
+                          : 'bg-[#2c2c2e]/70 text-slate-200'
+                      }`}
                     >
                       {item.label}
                     </button>
@@ -158,59 +176,101 @@ export default function Deposit({ activeScreen, onNavigate }) {
             </section>
 
             {provider === 'telebirr' ? (
-              <label className="block rounded-2xl border border-white/[0.08] bg-[#12151f] p-3">
-                <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  Telebirr receiving number
-                </span>
-                <select
-                  value={receivingNumber}
-                  onChange={(event) => setReceivingNumber(event.target.value)}
-                  className="w-full rounded-xl border border-white/10 bg-[#0a0b14] px-3 py-2.5 text-sm text-white outline-none"
-                >
-                  {telebirrAccounts.map((account) => (
-                    <option key={account.number} value={account.number}>
-                      {account.number} — {account.receiverName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
+              <>
+                <label className="block rounded-2xl border border-white/[0.08] bg-[#12151f] p-3">
+                  <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Telebirr receiving number
+                  </span>
+                  <select
+                    value={receivingNumber}
+                    onChange={(event) => setReceivingNumber(event.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-[#0a0b14] px-3 py-2.5 text-sm text-white outline-none"
+                  >
+                    {telebirrAccounts.map((account) => (
+                      <option key={account.number} value={account.number}>
+                        {account.number} — {account.receiverName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-            <section className="rounded-2xl border border-emerald-400/15 bg-emerald-500/5 px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
-                Pay to
-              </p>
-              <p className="mt-1 text-sm font-semibold text-white">{payTo.name}</p>
-              <p className="text-sm tabular-nums text-slate-300">{payTo.number}</p>
-              {payTo.account ? (
-                <p className="text-xs tabular-nums text-slate-400">{payTo.account}</p>
-              ) : null}
-            </section>
+                <section className="rounded-2xl border border-emerald-400/15 bg-emerald-500/5 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
+                    Pay to
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-white">{payTo.name}</p>
+                  <p className="text-sm tabular-nums text-slate-300">{payTo.number}</p>
+                </section>
 
-            <label className="block">
-              <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                Amount (ETB)
-              </span>
-              <input
-                inputMode="decimal"
-                value={amount}
-                onChange={(event) => setAmount(event.target.value)}
-                placeholder="500"
-                className="w-full rounded-xl border border-white/10 bg-[#12151f] px-3 py-2.5 text-sm text-white outline-none"
-              />
-            </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Amount (ETB)
+                  </span>
+                  <input
+                    inputMode="decimal"
+                    value={amount}
+                    onChange={(event) => setAmount(event.target.value)}
+                    placeholder="500"
+                    className="w-full rounded-xl border border-white/10 bg-[#12151f] px-3 py-2.5 text-sm text-white outline-none"
+                  />
+                </label>
 
-            <label className="block">
-              <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                Transaction / reference number
-              </span>
-              <input
-                value={reference}
-                onChange={(event) => setReference(event.target.value)}
-                placeholder="Enter the payment reference"
-                className="w-full rounded-xl border border-white/10 bg-[#12151f] px-3 py-2.5 text-sm text-white outline-none"
-              />
-            </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Transaction / reference number
+                  </span>
+                  <input
+                    value={reference}
+                    onChange={(event) => setReference(event.target.value)}
+                    placeholder="Enter the payment reference"
+                    className="w-full rounded-xl border border-white/10 bg-[#12151f] px-3 py-2.5 text-sm text-white outline-none"
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <section className="rounded-2xl bg-[#1c1c1e] px-4 py-3 text-sm leading-relaxed text-white">
+                  {cbe?.enabled ? (
+                    <>
+                      <p className="font-bold">🏦 CBEBirr Deposit</p>
+                      <p className="mt-1">
+                        Account: <span className="tabular-nums">{cbeAccount}</span>
+                      </p>
+                      {cbe?.receiverName ? (
+                        <p>Name: {cbe.receiverName}</p>
+                      ) : null}
+                      <p className="mt-3 font-bold">📱 CBEBirr Deposit Steps</p>
+                      <p className="mt-1">1️⃣ ከላይ ባለው የ CBEBirr አካውንት ገንዘቡን ያስገቡ።</p>
+                      <p>2️⃣ ክፍያ ካደረጉ በኋላ የ CBEBirr የጽሁፍ መልእክት (SMS) ይደርስዎታል፡፡</p>
+                      <p>3️⃣ የደረሳችሁን SMS ሙሉ በሙሉ ኮፒ በማድረግ በዚህ ቻት ፔስት አድርጉ፡፡</p>
+                      <p className="mt-3">💬 የክፍያ ችግር ካለ፣ @Edil_bingo ይጠቀሙ፡፡</p>
+                      <p className="mt-3 text-slate-400">------------------------------</p>
+                      <p className="mt-2">
+                        📩 After sending payment, please paste the SMS confirmation below 👇
+                      </p>
+                      <p className="text-slate-300">You can paste multiple times if needed.</p>
+                    </>
+                  ) : (
+                    <p className="text-rose-200">CBEBirr deposits are not configured.</p>
+                  )}
+                </section>
+
+                {cbe?.enabled ? (
+                  <label className="block">
+                    <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                      CBEBirr SMS
+                    </span>
+                    <textarea
+                      value={reference}
+                      onChange={(event) => setReference(event.target.value)}
+                      placeholder="Paste the CBEBirr SMS confirmation"
+                      rows={5}
+                      className="w-full rounded-xl border border-white/10 bg-[#12151f] px-3 py-2.5 text-sm text-white outline-none"
+                    />
+                  </label>
+                ) : null}
+              </>
+            )}
 
             {error ? (
               <p className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
@@ -224,13 +284,15 @@ export default function Deposit({ activeScreen, onNavigate }) {
               </p>
             ) : null}
 
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full rounded-xl bg-emerald-500 py-3 text-sm font-bold uppercase tracking-[0.16em] text-emerald-950 disabled:opacity-60"
-            >
-              {submitting ? 'Verifying…' : 'Submit deposit'}
-            </button>
+            {provider === 'telebirr' || cbe?.enabled ? (
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full rounded-xl bg-emerald-500 py-3 text-sm font-bold uppercase tracking-[0.16em] text-emerald-950 disabled:opacity-60"
+              >
+                {submitting ? 'Verifying…' : provider === 'cbe' ? 'Submit SMS' : 'Submit deposit'}
+              </button>
+            ) : null}
           </form>
         )}
       </div>
