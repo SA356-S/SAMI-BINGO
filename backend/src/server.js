@@ -105,11 +105,18 @@ app.get('/', (_req, res) => {
 });
 
 app.get('/health', (_req, res) => {
+  const methods = require('./config/depositAccounts').getPublicDepositMethods();
   res.json({
     ok: true,
     service: 'edil-bingo-backend',
     activeSessions: gameManager.listSessions().length,
     lobbyGameId: gameManager.getLobbySession().gameId,
+    miniAppUrl: require('./config/miniAppUrl').getMiniAppUrl(),
+    deposit: {
+      qbirrKeyConfigured: Boolean(String(process.env.QBIRR_API_KEY || '').trim()),
+      telebirrAccounts: methods.telebirr.accounts.length,
+      cbeConfigured: methods.cbe.enabled,
+    },
   });
 });
 

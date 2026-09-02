@@ -1,4 +1,5 @@
 const { WELCOME_MESSAGE, welcomeReply } = require('../keyboards');
+const { getMiniAppUrl } = require('../../config/miniAppUrl');
 const { handleBalanceCommand } = require('./balanceHandler');
 const { handlePlayCommand } = require('./playHandler');
 const { handleDepositCommand } = require('./depositHandler');
@@ -132,6 +133,20 @@ async function setupBotCommands(bot) {
     await bot.telegram.setMyCommands(BOT_COMMANDS);
   } catch (err) {
     console.warn('[bot] setMyCommands failed:', err?.message || err);
+  }
+
+  const miniAppUrl = getMiniAppUrl();
+  try {
+    await bot.telegram.setChatMenuButton({
+      menuButton: {
+        type: 'web_app',
+        text: 'Play',
+        web_app: { url: miniAppUrl },
+      },
+    });
+    console.log(`[bot] Telegram Play/menu button → ${miniAppUrl}`);
+  } catch (err) {
+    console.warn('[bot] setChatMenuButton failed:', err?.message || err);
   }
 }
 

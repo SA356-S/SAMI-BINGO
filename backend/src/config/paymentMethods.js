@@ -1,7 +1,6 @@
 const { loadEnv } = require('./env');
 const {
   getEnabledPaymentMethods,
-  getPublicDepositMethods,
   normalizeProvider,
 } = require('./depositAccounts');
 
@@ -15,11 +14,8 @@ let cachedMethods = null;
 function getPaymentMethods() {
   if (!cachedMethods) {
     cachedMethods = buildPaymentMethods();
-    const methods = getPublicDepositMethods();
-    console.log('[deposit] methods', {
-      telebirrAccounts: methods.telebirr.accounts.length,
-      cbeConfigured: methods.cbe.enabled,
-    });
+    const { logDepositStartupStatus } = require('./depositAccounts');
+    logDepositStartupStatus();
   }
   return cachedMethods;
 }

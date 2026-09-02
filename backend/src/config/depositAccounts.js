@@ -172,6 +172,40 @@ function getPublicDepositMethods() {
   };
 }
 
+/** Production startup check — never logs secrets. */
+function logDepositStartupStatus() {
+  const methods = getPublicDepositMethods();
+  const qbirrKeyConfigured = Boolean(String(process.env.QBIRR_API_KEY || '').trim());
+  const qbirrBaseUrl = String(
+    process.env.QBIRR_BASE_URL || 'https://verify.qbirr.com'
+  ).trim();
+  const telebirrAccounts = methods.telebirr.accounts.length;
+  const cbeConfigured = methods.cbe.enabled;
+
+  console.log('[deposit] startup', {
+    qbirrKeyConfigured,
+    qbirrBaseUrl,
+    telebirrAccounts,
+    cbeConfigured,
+  });
+
+  if (!qbirrKeyConfigured) {
+    console.error(
+      '[deposit] QBIRR_API_KEY is not set. Receipt verification will return "Deposits are temporarily unavailable." Set QBIRR_API_KEY in Railway Variables (local backend/.env is not uploaded).'
+    );
+  }
+  if (telebirrAccounts === 0) {
+    console.error(
+      '[deposit] DEPOSIT_TELEBIRR_ACCOUNTS is not set. Telebirr deposits cannot start. Set it in Railway Variables.'
+    );
+  }
+  if (!cbeConfigured) {
+    console.warn(
+      '[deposit] CBE Birr is not fully configured (DEPOSIT_CBEBIRR_NUMBER, DEPOSIT_CBEBIRR_RECEIVER_NAME, DEPOSIT_CBEBIRR_ACCOUNT).'
+    );
+  }
+}
+
 function getEnabledPaymentMethods() {
   const methods = getPublicDepositMethods();
   const list = [];
@@ -211,4 +245,5 @@ module.exports = {
   resolveReceiver,
   getPublicDepositMethods,
   getEnabledPaymentMethods,
+  logDepositStartupStatus,
 };

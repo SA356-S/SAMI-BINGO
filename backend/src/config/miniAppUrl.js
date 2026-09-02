@@ -13,6 +13,17 @@ function isLocalDevUrl(url) {
   }
 }
 
+/** Tunnel / previous-host URLs that must not be used as the Telegram Play button on Railway. */
+function isLegacyMiniAppHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  return (
+    host.endsWith('.ngrok-free.dev') ||
+    host.endsWith('.ngrok.io') ||
+    host.endsWith('.ngrok.app') ||
+    host.endsWith('.onrender.com')
+  );
+}
+
 function toHttpsOrigin(raw) {
   const trimmed = normalizeUrl(raw);
   if (!trimmed) return '';
@@ -36,7 +47,14 @@ function resolveDeployedPublicUrl() {
   const cors = String(process.env.CORS_ORIGIN || '')
     .split(',')
     .map((o) => normalizeUrl(o))
-    .find((o) => o.startsWith('https://') && !isLocalDevUrl(o));
+    .find((o) => {
+      if (!o.startsWith('https://') || isLocalDevUrl(o)) return false;
+      try {
+        return !isLegacyMiniAppHost(new URL(o).hostname);
+      } catch {
+        return false;
+      }
+    });
   if (cors) return cors;
 
   return '';
@@ -46,8 +64,13 @@ function getMiniAppUrl() {
   const explicit = normalizeUrl(process.env.MINI_APP_URL);
   const deployed = resolveDeployedPublicUrl();
 
-  if (deployed && (!explicit || isLocalDevUrl(explicit))) {
-    return deployed;
+  if (deployed) {
+    if (!explicit || isLocalDevUrl(explicit)) return deployed;
+    try {
+      if (isLegacyMiniAppHost(new URL(explicit).hostname)) return deployed;
+    } catch {
+      return deployed;
+    }
   }
 
   return explicit || deployed || DEFAULT_LOCAL_MINI_APP;
@@ -59,7 +82,11 @@ function validateMiniAppUrl() {
   const explicit = normalizeUrl(process.env.MINI_APP_URL);
   const deployed = resolveDeployedPublicUrl();
 
-  if (!explicit && deployed) {
+  if (explicit && deployed && url === deployed && explicit !== deployed) {
+    console.log(
+      `[bot] MINI_APP_URL is a legacy host — using deployed origin instead: ${url}`
+    );
+  } else if (!explicit && deployed) {
     console.log(`[bot] MINI_APP_URL not set — using deployed origin: ${url}`);
   }
 
@@ -94,4 +121,10 @@ function validateMiniAppUrl() {
   return url;
 }
 
-module.exports = { getMiniAppUrl, validateMiniAppUrl, DEFAULT_LOCAL_MINI_APP };
+module.exports = {
+  getMiniAppUrl,
+  validateMiniAppUrl,
+  DEFAULT_LOCAL_MINI_APP,
+  resolveDeployedPublicUrl,
+  isLegacyMiniAppHost,
+};

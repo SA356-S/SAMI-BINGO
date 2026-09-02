@@ -443,3 +443,25 @@ test('Telebirr deposit without typed amount credits the qbirr verified amount', 
   assert.equal(result.verifiedAmount, 50);
   assert.equal(wallets.get('3001').play, 50);
 });
+
+test('missing QBIRR_API_KEY returns deposit_not_configured without calling qbirr', async () => {
+  const prev = process.env.QBIRR_API_KEY;
+  process.env.QBIRR_API_KEY = '';
+  let called = false;
+  const result = await verifyWithQbirr(
+    {
+      provider: 'telebirr',
+      ref: 'CKI5ABC12XY',
+      amount: 50,
+      receiver_name: 'WASIHUN',
+    },
+    async () => {
+      called = true;
+      return { ok: true, status: 200, json: async () => ({ verified: true }) };
+    }
+  );
+  process.env.QBIRR_API_KEY = prev;
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'deposit_not_configured');
+  assert.equal(called, false);
+});
