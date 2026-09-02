@@ -13,6 +13,7 @@ const {
   getDepositRejectionMessage,
   formatDepositSuccessMessage,
   extractTelebirrReference,
+  extractCbeReference,
 } = require('../../services/depositVerificationService');
 const { SUPPORT_CONTACTS } = require('./supportHandler');
 
@@ -90,22 +91,27 @@ function formatTelebirrInstructions(account) {
 }
 
 function formatCbeInstructions(cbe) {
-  const accountLine = cbe.account
-    ? `<b>Account:</b> <code>${cbe.account}</code>`
-    : '';
-  const numberLine = cbe.number ? `<b>Number:</b> <code>${cbe.number}</code>` : '';
+  const accountValue = cbe.account || cbe.number;
+  const numberLine =
+    cbe.number && cbe.number !== accountValue
+      ? `<b>Number:</b> <code>${cbe.number}</code>`
+      : '';
   return [
     '<b>🏦 CBE Birr Deposit</b>',
-    accountLine,
+    accountValue ? `<b>Account:</b> <code>${accountValue}</code>` : '',
     numberLine,
     cbe.receiverName ? `<b>Name:</b> ${cbe.receiverName}` : '',
     '',
     '<b>📱 CBE Birr Deposit Steps</b>',
     '1️⃣ ከላይ ባለው የ CBE Birr አካውንት ገንዘቡን ያስገቡ።',
-    '2️⃣ ክፍያ ካደረጉ በኋላ የግብይት ቁጥር ይደርስዎታል፡፡',
-    '3️⃣ የግብይት / Transaction ቁጥርዎን እዚህ ይላኩ።',
+    '2️⃣ ክፍያ ካደረጉ በኋላ የ CBE Birr የጽሁፍ መልእክት (SMS) ይደርስዎታል፡፡',
+    '3️⃣ የደረሳችሁን SMS ሙሉ በሙሉ ኮፒ በማድረግ በዚህ ቻት ፔስት አድርጉ፡፡',
     '',
     `💬 የክፍያ ችግር ካለ፣ ${supportHandle()} ይጠቀሙ፡፡`,
+    '',
+    '------------------------------',
+    '📩 After sending payment, please paste the SMS confirmation below 👇',
+    'You can paste multiple times if needed.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -229,13 +235,12 @@ async function chooseMethod(ctx, methodKey) {
   }
 
   setState(userId, {
-    step: 'await_amount',
+    step: 'await_receipt',
     amount: null,
     provider: 'cbe',
-    receivingNumber: methods.cbe.number,
+    receivingNumber: methods.cbe.number || methods.cbe.account,
   });
   await sendInstructions(ctx, 'cbe', formatCbeInstructions(methods.cbe));
-  await ctx.reply('💰 የተቀማጭ ገንዘብ መጠን በ ETB ያስገቡ (ቁጥር ብቻ)። ለምሳሌ፡ 50');
 }
 
 async function chooseTelebirrNumber(ctx, numberKey) {
@@ -270,12 +275,18 @@ async function handleReceiptText(ctx) {
   if (!userId) return false;
 
   const s = getState(userId);
-  if (!s || s.step !== 'await_receipt' || s.provider !== 'telebirr') return false;
+  if (!s || s.step !== 'await_receipt') return false;
+  if (s.provider !== 'telebirr' && s.provider !== 'cbe') return false;
 
   const raw = String(ctx.message?.text || '').trim();
-  const reference = extractTelebirrReference(raw);
+  const reference =
+    s.provider === 'cbe' ? extractCbeReference(raw) : extractTelebirrReference(raw);
   if (!reference || reference.length < 4) {
-    await ctx.reply('እባክዎ የTelebirr SMS / receipt መልእክት ሙሉ በሙሉ ይለጥፉ።');
+    await ctx.reply(
+      s.provider === 'cbe'
+        ? 'እባክዎ የCBE Birr SMS / receipt መልእክት ሙሉ በሙሉ ይለጥፉ።'
+        : 'እባክዎ የTelebirr SMS / receipt መልእክት ሙሉ በሙሉ ይለጥፉ።'
+    );
     return true;
   }
 
@@ -283,14 +294,18 @@ async function handleReceiptText(ctx) {
 
   const result = await verifyAndCreditDeposit({
     userId: String(userId),
-    provider: 'telebirr',
+    provider: s.provider,
     reference: raw,
     receivingNumber: s.receivingNumber,
     source: 'bot',
   });
 
   if (!result.ok && result.error === 'invalid_amount') {
-    await ctx.reply('እባክዎ መጠኑ የሚታይበትን ሙሉ የTelebirr SMS ይለጥፉ።');
+    await ctx.reply(
+      s.provider === 'cbe'
+        ? 'እባክዎ መጠኑ የሚታይበትን ሙሉ የCBE Birr SMS ይለጥፉ።'
+        : 'እባክዎ መጠኑ የሚታይበትን ሙሉ የTelebirr SMS ይለጥፉ።'
+    );
     return true;
   }
 

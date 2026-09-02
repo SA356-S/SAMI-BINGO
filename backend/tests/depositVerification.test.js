@@ -14,10 +14,12 @@ process.env.DEPOSIT_CBEBIRR_ACCOUNT = '1000017692643';
 const {
   parseTelebirrAccounts,
   resolveReceiver,
+  getCbeConfig,
+  getPublicDepositMethods,
   phoneKey,
 } = require('../src/config/depositAccounts');
 const { verifyWithQbirr } = require('../src/services/qbirrClient');
-const { verifyAndCreditDeposit, extractTelebirrReference, extractReceiptAmountHint } = require('../src/services/depositVerificationService');
+const { verifyAndCreditDeposit, extractTelebirrReference, extractCbeReference, extractReceiptAmountHint } = require('../src/services/depositVerificationService');
 const depositRoutes = require('../src/routes/depositRoutes');
 const botDepositRoutes = require('../src/routes/botDepositRoutes');
 const depositHandler = require('../src/bot/handlers/depositHandler');
@@ -442,6 +444,66 @@ test('Telebirr deposit without typed amount credits the qbirr verified amount', 
   assert.equal(result.ok, true);
   assert.equal(result.verifiedAmount, 50);
   assert.equal(wallets.get('3001').play, 50);
+});
+
+test('CBE Birr is configured from receiver name and account without a phone number', () => {
+  const prevNumber = process.env.DEPOSIT_CBEBIRR_NUMBER;
+  delete process.env.DEPOSIT_CBEBIRR_NUMBER;
+  process.env.DEPOSIT_CBEBIRR_RECEIVER_NAME = 'CAPITAL BINGO';
+  process.env.DEPOSIT_CBEBIRR_ACCOUNT = '1000017692643';
+
+  const config = getCbeConfig();
+  const methods = getPublicDepositMethods();
+  const resolved = resolveReceiver('cbe');
+
+  if (prevNumber == null) delete process.env.DEPOSIT_CBEBIRR_NUMBER;
+  else process.env.DEPOSIT_CBEBIRR_NUMBER = prevNumber;
+
+  assert.equal(config.configured, true);
+  assert.equal(methods.cbe.enabled, true);
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.receiverName, 'CAPITAL BINGO');
+  assert.equal(resolved.receiverAccount, '1000017692643');
+});
+
+test('CBE Birr SMS paste extracts reference and amount hint', () => {
+  const sms = [
+    'Dear Customer, you have transferred ETB 250.00 to CAPITAL BINGO',
+    'Your transaction number is FT25001ABCDE.',
+    'Thank you for using CBE Birr!',
+  ].join(' ');
+  assert.equal(extractCbeReference(sms), 'FT25001ABCDE');
+  assert.equal(extractReceiptAmountHint(sms), 250);
+});
+
+test('CBE Birr deposit without typed amount credits the qbirr verified amount', async () => {
+  const wallets = new Map();
+  const deps = createMemoryDeps(async (payload) => {
+    assert.equal(payload.provider, 'cbe');
+    assert.equal(payload.ref, 'FT25001ABCDE');
+    assert.equal(payload.amount, 250);
+    assert.equal(payload.receiver_name, 'CAPITAL BINGO');
+    assert.equal(payload.receiver_account, '1000017692643');
+    return {
+      ok: true,
+      qbirr: { verified: true, payer: 'KEBEDE', amount: 250, error: '' },
+    };
+  }, wallets);
+
+  const result = await verifyAndCreditDeposit(
+    {
+      userId: '3002',
+      provider: 'cbe',
+      reference:
+        'Dear Customer, you have transferred ETB 250.00 to CAPITAL BINGO. Transaction number is FT25001ABCDE.',
+      source: 'bot',
+    },
+    deps
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.verifiedAmount, 250);
+  assert.equal(wallets.get('3002').play, 250);
 });
 
 test('missing QBIRR_API_KEY returns deposit_not_configured without calling qbirr', async () => {

@@ -90,7 +90,7 @@ function getCbeConfig() {
     number,
     receiverName,
     receiverAccount,
-    configured: Boolean(number && receiverName && receiverAccount),
+    configured: Boolean(receiverName && (receiverAccount || number)),
   };
 }
 
@@ -141,8 +141,8 @@ function resolveReceiver(provider, selectedNumber) {
     ok: true,
     provider: CBE_PROVIDER,
     receiverName: cbe.receiverName,
-    receiverAccount: cbe.receiverAccount,
-    receivingNumber: cbe.number,
+    receiverAccount: cbe.receiverAccount || cbe.number,
+    receivingNumber: cbe.number || cbe.receiverAccount,
   };
 }
 
@@ -201,7 +201,7 @@ function logDepositStartupStatus() {
   }
   if (!cbeConfigured) {
     console.warn(
-      '[deposit] CBE Birr is not fully configured (DEPOSIT_CBEBIRR_NUMBER, DEPOSIT_CBEBIRR_RECEIVER_NAME, DEPOSIT_CBEBIRR_ACCOUNT).'
+      '[deposit] CBE Birr is not configured. Set DEPOSIT_CBEBIRR_RECEIVER_NAME and DEPOSIT_CBEBIRR_ACCOUNT (DEPOSIT_CBEBIRR_NUMBER is optional).'
     );
   }
 }

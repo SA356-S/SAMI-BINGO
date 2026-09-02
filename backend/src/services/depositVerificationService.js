@@ -51,6 +51,27 @@ function extractTelebirrReference(raw) {
   return tokens[0] || '';
 }
 
+function extractCbeReference(raw) {
+  const text = normalizeString(raw);
+  if (!text) return '';
+
+  const labeled = text.match(
+    /(?:transaction\s*(?:id|number|no\.?)|txn(?:\s*id)?|ft\s*(?:number|no\.?)|receipt\s*(?:id|no\.?|number)|የግብይት\s*(?:ቁጥር|መለያ)|የክፍያ\s*ቁጥር)\s*[:#=\-]?\s*([A-Za-z0-9-]{6,})/i
+  );
+  if (labeled?.[1]) return labeled[1];
+
+  const ft = text.match(/\b(FT[A-Za-z0-9]{8,})\b/i);
+  if (ft?.[1]) return ft[1];
+
+  const compact = text.replace(/\s+/g, '');
+  if (/^[A-Za-z0-9-]{6,40}$/.test(compact)) return compact;
+
+  const tokens = text.match(/[A-Za-z0-9-]{8,24}/g) || [];
+  const mixed = tokens.filter((token) => /[A-Za-z]/.test(token) && /\d/.test(token));
+  if (mixed.length) return mixed[0];
+  return tokens[0] || '';
+}
+
 function extractReceiptAmountHint(raw) {
   const text = String(raw ?? '');
   const labeled = text.match(
@@ -71,6 +92,10 @@ function resolveTransactionReference(provider, raw) {
   const text = normalizeString(raw);
   if (provider === TELEBIRR_PROVIDER) {
     const extracted = extractTelebirrReference(text);
+    return extracted || '';
+  }
+  if (provider === CBE_PROVIDER) {
+    const extracted = extractCbeReference(text);
     return extracted || '';
   }
   return normalizeReference(text);
@@ -567,6 +592,7 @@ module.exports = {
   formatDepositSuccessMessage,
   normalizeReference,
   extractTelebirrReference,
+  extractCbeReference,
   extractReceiptAmountHint,
   toAmount,
   amountsMatch,
