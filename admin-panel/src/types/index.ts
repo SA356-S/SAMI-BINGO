@@ -78,6 +78,43 @@ export interface WithdrawRequestsResponse {
   stats: WithdrawRequestStats;
 }
 
+export type ManualDepositStatus = 'pending' | 'approved' | 'rejected';
+
+export interface ManualDepositRow {
+  id: string;
+  userId: string;
+  telegramUsername: string;
+  telegramFirstName: string;
+  telegramLastName: string;
+  displayName: string;
+  submittedAmount: number | null;
+  approvedAmount: number | null;
+  amount: number | null;
+  photoFileId: string;
+  photoCaption: string;
+  status: ManualDepositStatus;
+  walletCredited: boolean;
+  screenshotUrl: string;
+  createdAt: string;
+  updatedAt?: string;
+  reviewedAt: string | null;
+  reviewedByTelegramId: string;
+  reviewedByRole: string;
+}
+
+export interface ManualDepositStats {
+  pending: number;
+  approved: number;
+  rejected: number;
+  total: number;
+}
+
+export interface ManualDepositsResponse {
+  ok: boolean;
+  requests: ManualDepositRow[];
+  stats: ManualDepositStats;
+}
+
 export interface FinancialPeriodStats {
   depositTotal: number;
   depositCount: number;

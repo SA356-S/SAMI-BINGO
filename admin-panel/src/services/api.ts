@@ -27,6 +27,8 @@ import type {
   FirstDepositBonusSettings,
   WithdrawRequestsResponse,
   WithdrawRequestStatus,
+  ManualDepositsResponse,
+  ManualDepositStatus,
   DailyProfitSummary,
   FinancialSummary,
 } from '../types';
@@ -411,6 +413,36 @@ export async function approveWithdrawRequest(requestId: string) {
 export async function rejectWithdrawRequest(requestId: string) {
   const { data } = await api.post<{ ok: boolean; request?: unknown; error?: string }>(
     `/admin/withdraw-requests/${encodeURIComponent(requestId)}/reject`
+  );
+  return data;
+}
+
+export async function fetchManualDeposits(status?: ManualDepositStatus) {
+  const { data } = await api.get<ManualDepositsResponse>('/admin/manual-deposits', {
+    params: status ? { status } : {},
+  });
+  return data;
+}
+
+export async function fetchManualDepositScreenshot(requestId: string) {
+  const { data } = await api.get<Blob>(
+    `/admin/manual-deposits/${encodeURIComponent(requestId)}/screenshot`,
+    { responseType: 'blob' }
+  );
+  return data;
+}
+
+export async function approveManualDeposit(requestId: string, amount: number) {
+  const { data } = await api.post<{ ok: boolean; request?: unknown; error?: string; message?: string }>(
+    `/admin/manual-deposits/${encodeURIComponent(requestId)}/approve`,
+    { amount }
+  );
+  return data;
+}
+
+export async function rejectManualDeposit(requestId: string) {
+  const { data } = await api.post<{ ok: boolean; request?: unknown; error?: string }>(
+    `/admin/manual-deposits/${encodeURIComponent(requestId)}/reject`
   );
   return data;
 }

@@ -125,9 +125,82 @@ function editWithdrawBotMessage(chatId, messageId, text, replyMarkup = null) {
   return postTelegramApi(token, 'editMessageText', body, 'withdraw-bot');
 }
 
+function guessImageContentType(filePath) {
+  const lower = String(filePath || '').toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  return 'image/jpeg';
+}
+
+function downloadTelegramFilePath(token, filePath, logLabel = 'telegram') {
+  const botToken = String(token || '').trim();
+  const relative = String(filePath || '').replace(/^\/+/, '');
+  if (!botToken || !relative) {
+    return Promise.resolve({ ok: false, error: 'missing_file' });
+  }
+
+  const apiPath = `/file/bot${botToken}/${relative}`;
+
+  return new Promise((resolve) => {
+    const req = https.get(
+      {
+        hostname: 'api.telegram.org',
+        path: apiPath,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const buffer = Buffer.concat(chunks);
+          if (res.statusCode !== 200) {
+            console.warn(`[${logLabel}] file download failed`, {
+              statusCode: res.statusCode,
+            });
+            resolve({ ok: false, error: 'download_failed', statusCode: res.statusCode });
+            return;
+          }
+          resolve({
+            ok: true,
+            buffer,
+            contentType:
+              res.headers['content-type'] || guessImageContentType(relative),
+            filePath: relative,
+          });
+        });
+      }
+    );
+
+    req.on('error', (err) => {
+      console.warn(`[${logLabel}] file download error:`, err?.message || err);
+      resolve({ ok: false, error: err?.message || String(err) });
+    });
+  });
+}
+
+/**
+ * Resolve a Telegram file_id to bytes via BOT_TOKEN. Never expose the token.
+ */
+async function downloadTelegramFileById(fileId) {
+  const token = process.env.BOT_TOKEN;
+  const id = String(fileId || '').trim();
+  if (!id) {
+    return { ok: false, error: 'missing_file_id' };
+  }
+
+  const meta = await postTelegramApi(token, 'getFile', { file_id: id }, 'telegram');
+  const filePath = meta?.result?.file_path;
+  if (!meta?.ok || !filePath) {
+    return { ok: false, error: meta?.error || 'file_not_found' };
+  }
+
+  return downloadTelegramFilePath(token, filePath, 'telegram');
+}
+
 module.exports = {
   sendTelegramMessage,
   sendWithdrawBotMessage,
   editWithdrawBotMessage,
   postTelegramApi,
+  downloadTelegramFileById,
 };

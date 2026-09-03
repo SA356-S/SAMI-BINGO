@@ -25,6 +25,13 @@ const {
   updateWithdrawStatus,
   emitWithdrawRequestsUpdate,
 } = require('../services/withdrawAdminService');
+const {
+  listManualDeposits,
+  approveManualDeposit,
+  rejectManualDeposit,
+  getManualDepositScreenshot,
+  isValidObjectId,
+} = require('../services/manualDepositService');
 
 const robotManagementService = require('../services/robotManagementService');
 const robotConfigService = require('../services/robotConfigService');
@@ -265,6 +272,81 @@ router.post('/withdraw-requests/:id/reject', requireAdminOrManager, async (req, 
   } catch (err) {
     console.error('[admin] withdraw reject error', err);
     res.status(500).json({ ok: false, error: 'withdraw_reject_failed' });
+  }
+});
+
+function manualDepositHttpStatus(error) {
+  if (error === 'already_processed') return 409;
+  if (error === 'not_authorized') return 403;
+  if (error === 'not_found' || error === 'photo_missing') return 404;
+  return 400;
+}
+
+router.get('/manual-deposits', requireAdminOrManager, async (req, res) => {
+  try {
+    const status = req.query.status ? String(req.query.status) : undefined;
+    const data = await listManualDeposits({ status, limit: 100 });
+    res.json(data);
+  } catch (err) {
+    console.error('[admin] manual-deposits list error', err);
+    res.status(500).json({ ok: false, error: 'manual_deposits_failed' });
+  }
+});
+
+router.get('/manual-deposits/:id/screenshot', requireAdminOrManager, async (req, res) => {
+  try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ ok: false, error: 'invalid_request_id' });
+    }
+    const result = await getManualDepositScreenshot(req.params.id);
+    if (!result.ok) {
+      return res.status(manualDepositHttpStatus(result.error)).json(result);
+    }
+    res.setHeader('Content-Type', result.contentType || 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.send(result.buffer);
+  } catch (err) {
+    console.error('[admin] manual-deposit screenshot error', err);
+    res.status(500).json({ ok: false, error: 'screenshot_failed' });
+  }
+});
+
+router.post('/manual-deposits/:id/approve', requireAdminOrManager, async (req, res) => {
+  try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ ok: false, error: 'invalid_request_id' });
+    }
+    const result = await approveManualDeposit(req.params.id, {
+      amount: req.body?.amount,
+      actorTelegramId: req.panelAdmin?.telegramId,
+      actorRole: req.panelAdmin?.role,
+    });
+    if (!result.ok) {
+      return res.status(manualDepositHttpStatus(result.error)).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('[admin] manual-deposit approve error', err);
+    res.status(500).json({ ok: false, error: 'manual_deposit_approve_failed' });
+  }
+});
+
+router.post('/manual-deposits/:id/reject', requireAdminOrManager, async (req, res) => {
+  try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ ok: false, error: 'invalid_request_id' });
+    }
+    const result = await rejectManualDeposit(req.params.id, {
+      actorTelegramId: req.panelAdmin?.telegramId,
+      actorRole: req.panelAdmin?.role,
+    });
+    if (!result.ok) {
+      return res.status(manualDepositHttpStatus(result.error)).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('[admin] manual-deposit reject error', err);
+    res.status(500).json({ ok: false, error: 'manual_deposit_reject_failed' });
   }
 });
 

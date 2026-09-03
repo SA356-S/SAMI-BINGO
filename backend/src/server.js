@@ -160,6 +160,12 @@ async function start() {
   } catch (err) {
     console.warn('[db] Deposit index sync failed:', err?.message || err);
   }
+  try {
+    const { ManualDepositModel } = require('./models/ManualDeposit');
+    await ManualDepositModel.syncIndexes();
+  } catch (err) {
+    console.warn('[db] ManualDeposit index sync failed:', err?.message || err);
+  }
   await hydrateWalletCacheFromDb();
   await robotConfigService.getConfig();
   await settingsService.getSettings();

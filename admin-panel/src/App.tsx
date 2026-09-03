@@ -15,6 +15,7 @@ import UserManagementPage from './pages/UserManagementPage';
 import RobotsPage from './pages/RobotsPage';
 import BroadcastPage from './pages/BroadcastPage';
 import WithdrawRequestsPage from './pages/WithdrawRequestsPage';
+import ManualDepositsPage from './pages/ManualDepositsPage';
 import RegistrationBonusPage from './pages/RegistrationBonusPage';
 import FirstDepositBonusPage from './pages/FirstDepositBonusPage';
 import AdminLayout from './components/AdminLayout';
@@ -111,6 +112,14 @@ export default function App() {
             element={
               <RoleRoute roles={['admin', 'manager']}>
                 <WithdrawRequestsPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/manual-deposits"
+            element={
+              <RoleRoute roles={['admin', 'manager']}>
+                <ManualDepositsPage />
               </RoleRoute>
             }
           />

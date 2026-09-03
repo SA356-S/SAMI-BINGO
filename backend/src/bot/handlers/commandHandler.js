@@ -14,6 +14,7 @@ const HELP_MESSAGE = [
   '/register — Register your phone number',
   '/balance — Main & play wallet balances',
   '/withdraw — Withdraw from main wallet',
+  '/manualdeposit — Manual deposit (screenshot)',
   '/invite — Invite friends & earn rewards',
   '/instruction — Bingo game instructions',
   '/support — Contact support',
@@ -29,6 +30,7 @@ const BOT_COMMANDS = [
   { command: 'deposit', description: 'Deposit' },
   { command: 'balance', description: 'Balance' },
   { command: 'withdraw', description: 'Withdraw' },
+  { command: 'manualdeposit', description: 'Manual Deposit' },
   { command: 'invite', description: 'Invite friends' },
   { command: 'instruction', description: 'Instruction' },
   { command: 'support', description: 'Support' },
@@ -92,6 +94,9 @@ async function handleFallbackCommand(ctx) {
     case 'withdraw':
       await handleWithdrawCommand(ctx);
       return true;
+    case 'manualdeposit':
+      await require('./manualDepositHandler').handleManualDepositCommand(ctx);
+      return true;
     case 'invite':
       await require('./inviteHandler').handleInviteCommand(ctx);
       return true;
@@ -150,4 +155,5 @@ module.exports = {
   handleStartCommand,
   handleHelpCommand,
   HELP_MESSAGE,
+  BOT_COMMANDS,
 };

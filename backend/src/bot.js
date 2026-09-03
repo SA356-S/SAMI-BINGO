@@ -11,6 +11,7 @@ const { registerPlayHandlers } = require('./bot/handlers/playHandler');
 const { registerMenuHandlers } = require('./bot/handlers/menuHandler');
 const { registerBalanceHandlers } = require('./bot/handlers/balanceHandler');
 const { registerDepositHandlers } = require('./bot/handlers/depositHandler');
+const { registerManualDepositHandlers } = require('./bot/handlers/manualDepositHandler');
 const { registerWithdrawHandlers } = require('./bot/handlers/withdrawHandler');
 const { registerInviteHandlers } = require('./bot/handlers/inviteHandler');
 const { registerInstructionHandlers } = require('./bot/handlers/instructionHandler');
@@ -77,6 +78,7 @@ function createBot() {
   registerMenuHandlers(bot);
   registerBalanceHandlers(bot);
   registerRegistrationHandlers(bot);
+  registerManualDepositHandlers(bot);
   registerDepositHandlers(bot);
   registerWithdrawHandlers(bot);
   registerInviteHandlers(bot);
