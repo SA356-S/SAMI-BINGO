@@ -17,6 +17,7 @@ import {
   hasFalseBingoClaim,
   pruneInvalidManualMarks,
   snapshotAutoMarksForCartels,
+  toggleManualMarkSynced,
 } from '../utils/bingoWin';
 import {
   deserializeManualMarks,
@@ -1252,15 +1253,17 @@ export default function MainGame() {
   }, [manualMarks, automatic, isPlayer, gameWon]);
 
   const toggleManualMark = (cartelId, row, col) => {
-    const key = `${row}-${col}`;
-    setManualMarks((prev) => {
-      const next = { ...prev };
-      const set = new Set(next[cartelId] ?? []);
-      if (set.has(key)) set.delete(key);
-      else set.add(key);
-      next[cartelId] = set;
-      return next;
-    });
+    setManualMarks((prev) =>
+      toggleManualMarkSynced({
+        tappedCartelId: cartelId,
+        row,
+        col,
+        cartelIds: activeCartels,
+        calledNumbers: calledSet,
+        gridsByCartel: cartelGrids,
+        existingMarks: prev,
+      })
+    );
   };
 
   const handleAutomaticToggle = () => {

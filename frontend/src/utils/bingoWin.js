@@ -1,4 +1,4 @@
-import { generateBingoCard } from './bingoCard';
+import { generateBingoCard } from './bingoCard.js';
 
 /** Line bingo — win by one row, column, diagonal, or four corners (not full card). */
 
@@ -41,6 +41,71 @@ function toManualMarkSet(manualMarks) {
   if (manualMarks instanceof Set) return manualMarks;
   if (Array.isArray(manualMarks)) return new Set(manualMarks.map(String));
   return new Set();
+}
+
+function getCartelGrid(cartelId, gridsByCartel = {}) {
+  return gridsByCartel[cartelId] ?? gridsByCartel[String(cartelId)] ?? generateBingoCard(cartelId).grid;
+}
+
+function findCellKeysWithNumber(grid, number) {
+  const keys = [];
+  if (!grid || number == null) return keys;
+  for (let row = 0; row < 5; row += 1) {
+    for (let col = 0; col < 5; col += 1) {
+      if (row === 2 && col === 2) continue;
+      if (grid[row]?.[col] === number) keys.push(cellKey(row, col));
+    }
+  }
+  return keys;
+}
+
+function marksForCartel(existingMarks, cartelId) {
+  return toManualMarkSet(
+    existingMarks?.[cartelId] ?? existingMarks?.[String(cartelId)]
+  );
+}
+
+/**
+ * Manual-mode only: toggle a tapped cell, and if that number is a called ball,
+ * apply the same select/unselect to the same player's other cartelas that contain it.
+ */
+export function toggleManualMarkSynced({
+  tappedCartelId,
+  row,
+  col,
+  cartelIds,
+  calledNumbers,
+  gridsByCartel = {},
+  existingMarks = {},
+}) {
+  if (row === 2 && col === 2) return existingMarks;
+
+  const tappedId = Number(tappedCartelId);
+  const tappedKey = cellKey(row, col);
+  const tappedGrid = getCartelGrid(tappedId, gridsByCartel);
+  const number = tappedGrid?.[row]?.[col];
+  const selecting = !marksForCartel(existingMarks, tappedId).has(tappedKey);
+  const called = toCalledSet(calledNumbers);
+  const ownIds = [...new Set((cartelIds ?? []).map(Number).filter((id) => id >= 1))];
+  const syncCalledNumber = number != null && called.has(number);
+  const idsToUpdate = syncCalledNumber && ownIds.length > 0 ? ownIds : [tappedId];
+  const next = { ...existingMarks };
+
+  for (const id of idsToUpdate) {
+    const set = new Set(marksForCartel(existingMarks, id));
+    const keys =
+      id === tappedId
+        ? [tappedKey]
+        : findCellKeysWithNumber(getCartelGrid(id, gridsByCartel), number);
+
+    for (const key of keys) {
+      if (selecting) set.add(key);
+      else set.delete(key);
+    }
+    next[id] = set;
+  }
+
+  return next;
 }
 
 /** True if any winning line pattern is fully marked on this card. */
