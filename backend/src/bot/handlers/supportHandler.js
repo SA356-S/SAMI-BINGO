@@ -1,6 +1,6 @@
 const SUPPORT_CONTACTS = [
-  { username: 'Edil_bingo', label: '@Edil_bingo' },
-  { username: 'Edil_bingo1', label: '@Edil_bingo1' },
+  { username: 'Capital_bingoo', label: '@Capital_bingoo' },
+  { username: 'Capibingo67', label: '@Capibingo67' },
 ];
 
 function formatSupportMessageHtml() {

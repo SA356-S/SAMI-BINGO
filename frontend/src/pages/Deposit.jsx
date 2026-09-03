@@ -243,7 +243,7 @@ export default function Deposit({ activeScreen, onNavigate }) {
                       <p className="mt-1">1️⃣ ከላይ ባለው የ CBEBirr አካውንት ገንዘቡን ያስገቡ።</p>
                       <p>2️⃣ ክፍያ ካደረጉ በኋላ የ CBEBirr የጽሁፍ መልእክት (SMS) ይደርስዎታል፡፡</p>
                       <p>3️⃣ የደረሳችሁን SMS ሙሉ በሙሉ ኮፒ በማድረግ በዚህ ቻት ፔስት አድርጉ፡፡</p>
-                      <p className="mt-3">💬 የክፍያ ችግር ካለ፣ @Edil_bingo ይጠቀሙ፡፡</p>
+                      <p className="mt-3">💬 የክፍያ ችግር ካለ፣ @Capital_bingoo ይጠቀሙ፡፡</p>
                       <p className="mt-3 text-slate-400">------------------------------</p>
                       <p className="mt-2">
                         📩 After sending payment, please paste the SMS confirmation below 👇

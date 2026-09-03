@@ -1,15 +1,14 @@
 const { Markup } = require('telegraf');
 const {
   getInvitePayload,
-  buildReferralLink,
   getOrCreateReferralCode,
-  getReferralStats,
 } = require('../../services/referralService');
 
 const INVITE_HEADER = '🔗 Invite your friends to Capital Bingo and earn rewards!';
+const DISPLAY_INVITE_LINK = 'https://t.me/Capitalbingo_bot';
 
-function formatInviteMessage(referralLink, totalInvited) {
-  const lines = [INVITE_HEADER, '', `🎁 ${referralLink}`];
+function formatInviteMessage(_referralLink, totalInvited) {
+  const lines = [INVITE_HEADER, '', `🎁 ${DISPLAY_INVITE_LINK}`];
   if (Number(totalInvited) > 0) {
     lines.push('', `👥 Friends invited: ${totalInvited}`);
   }
@@ -35,7 +34,7 @@ async function sendInviteMessage(ctx) {
 
   const { referralLink, totalInvited } = await getInvitePayload(String(userId));
   await ctx.reply(formatInviteMessage(referralLink, totalInvited), {
-    ...inviteReplyKeyboard(referralLink),
+    ...inviteReplyKeyboard(DISPLAY_INVITE_LINK),
     disable_web_page_preview: true,
   });
 }
@@ -54,9 +53,8 @@ async function handleCopyLink(ctx) {
   if (!userId) return;
 
   await ctx.answerCbQuery().catch(() => {});
-  const code = await getOrCreateReferralCode(String(userId));
-  const link = buildReferralLink(code);
-  await ctx.reply(`📋 Tap and hold to copy:\n\n${link}`, {
+  await getOrCreateReferralCode(String(userId));
+  await ctx.reply(`📋 Tap and hold to copy:\n\n${DISPLAY_INVITE_LINK}`, {
     disable_web_page_preview: true,
   });
 }

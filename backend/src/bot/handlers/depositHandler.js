@@ -60,7 +60,7 @@ function getMethodKeyboard() {
 }
 
 function supportHandle() {
-  return SUPPORT_CONTACTS[0]?.label || '@Edil_bingo';
+  return SUPPORT_CONTACTS[0]?.label || '@Capital_bingoo';
 }
 
 function formatDepositChooser() {
