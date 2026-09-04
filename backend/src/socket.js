@@ -846,22 +846,32 @@ function registerSocketHandlers(io) {
       const player =
         session.players.get(socket.id) ||
         session.getPlayerByUserId(payload.userId || socket.data.userId);
-      if (!player?.cartelIds?.includes(cartelId)) {
+
+      if (player && (payload.manualMarks || typeof payload.automatic === 'boolean')) {
+        session.updatePlayerMarks(
+          player.userId || payload.userId || socket.data.userId,
+          payload.manualMarks,
+          payload.automatic
+        );
+      }
+
+      if (!session.playerOwnsCartel(player, cartelId)) {
         const err = { ok: false, error: 'No Bingo' };
         if (typeof ack === 'function') ack(err);
         return;
       }
 
       const { validateBingoClaim } = require('./utils/bingoWin');
-      const cartelMarks =
-        player.manualMarks?.[String(cartelId)] ??
-        player.manualMarks?.[cartelId] ??
-        [];
+      const cartelMarks = session.getPlayerCartelMarks(player, cartelId);
+      const automatic =
+        typeof payload.automatic === 'boolean'
+          ? payload.automatic
+          : player.automatic !== false;
       const isValid = validateBingoClaim(
         cartelId,
         session.calledNumbers,
         cartelMarks,
-        player.automatic !== false
+        automatic
       );
 
       if (!isValid) {
@@ -879,7 +889,9 @@ function registerSocketHandlers(io) {
           cartelId: primaryCartelId,
           primaryCartelId,
           playerName: payload.playerName || socket.data.playerName,
+          userId: player.userId,
           winners: payload.winners,
+          _preWinAuthorized: true,
         });
       } catch (err) {
         console.error('[socket] game:bingo declareWinner failed', err);
@@ -889,8 +901,8 @@ function registerSocketHandlers(io) {
       }
 
       if (!winnerPayload) {
-        const err = { ok: false, error: 'No Bingo' };
-        if (typeof ack === 'function') ack(err);
+        const fail = { ok: false, error: 'Bingo claim failed' };
+        if (typeof ack === 'function') ack(fail);
         return;
       }
 

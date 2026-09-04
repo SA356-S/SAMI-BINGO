@@ -621,6 +621,8 @@ export default function MainGame() {
           playerName: getPlayerUserId(),
           userId: getPlayerUserId(),
           calledNumbers: calledHistoryRef.current,
+          manualMarks: serializeManualMarks(manualMarksRef.current),
+          automatic: automaticRef.current,
         },
         (ack) => {
           if (ack?.ok === false) {
@@ -934,34 +936,24 @@ export default function MainGame() {
   const handleBingoClaim = useCallback(() => {
     if (!isPlayer || gameWon || automatic) return;
 
-    const winnerId = findWinningCartel(
-      activeCartels,
-      calledSet,
-      manualMarks,
-      automatic
-    );
+    const history = calledHistoryRef.current;
+    const marks = manualMarksRef.current;
+    const cartels = activeCartelsRef.current;
+    const auto = automaticRef.current;
+    const winnerId = findWinningCartel(cartels, history, marks, auto);
 
     if (winnerId != null) {
       submitBingoClaim(winnerId);
       return;
     }
 
-    if (hasFalseBingoClaim(activeCartels, calledSet, manualMarks, automatic)) {
+    if (hasFalseBingoClaim(cartels, history, marks, auto)) {
       showNoBingoNotice();
       return;
     }
 
     showNoBingoNotice();
-  }, [
-    isPlayer,
-    gameWon,
-    automatic,
-    activeCartels,
-    calledSet,
-    manualMarks,
-    showNoBingoNotice,
-    submitBingoClaim,
-  ]);
+  }, [isPlayer, gameWon, automatic, showNoBingoNotice, submitBingoClaim]);
 
   const handleSessionInitResult = useCallback(
     (result) => {

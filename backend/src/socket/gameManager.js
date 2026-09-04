@@ -768,6 +768,23 @@ class GameSession {
     return { ok: true, cards };
   }
 
+  playerOwnsCartel(player, cartelId) {
+    const id = Number(cartelId);
+    if (!Number.isInteger(id) || id < 1) return false;
+    return (player?.cartelIds || []).some((raw) => Number(raw) === id);
+  }
+
+  getPlayerCartelMarks(player, cartelId) {
+    const marks = player?.manualMarks;
+    if (!marks || typeof marks !== 'object') return [];
+    return (
+      marks[String(cartelId)] ??
+      marks[Number(cartelId)] ??
+      marks[cartelId] ??
+      []
+    );
+  }
+
   updatePlayerMarks(userId, manualMarks, automatic) {
     const player = this.getPlayerByUserId(userId);
     if (!player) return false;
@@ -880,10 +897,7 @@ class GameSession {
         const cartelId = Number(rawId);
         if (!Number.isInteger(cartelId) || cartelId < 1) continue;
 
-        const marks =
-          player.manualMarks?.[String(cartelId)] ??
-          player.manualMarks?.[cartelId] ??
-          [];
+        const marks = this.getPlayerCartelMarks(player, cartelId);
         if (!validateBingoClaim(cartelId, this.calledNumbers, marks, automatic)) {
           continue;
         }
@@ -894,6 +908,9 @@ class GameSession {
           primaryCartelId: cartelId,
           playerName: player.playerName,
           userId: player.userId,
+          // Pattern already validated against official calledNumbers.
+          // A completed valid line must be Bingo, not intercepted as "No Bingo".
+          _preWinAuthorized: true,
         });
         if (result && typeof result.then === 'function') {
           void result.catch((err) => {

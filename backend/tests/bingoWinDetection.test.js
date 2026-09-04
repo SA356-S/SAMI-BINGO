@@ -136,3 +136,162 @@ test('non-winning called numbers do not end the round', async () => {
   session.clearResetTimer();
   session.stopCalling();
 });
+
+function middleRowMarkKeys() {
+  return ['2-0', '2-1', '2-3', '2-4'];
+}
+
+test('completed valid pattern is Bingo after the last called number is processed', async () => {
+  const numbers = winningLineNumbers();
+  const session = prepareCallingSession('WIN-DETECT-3');
+  const { io } = mockIo();
+
+  await withQueuedDraws(numbers, async () => {
+    for (let i = 0; i < numbers.length; i += 1) {
+      session.callNextBall(io, 1);
+      await flushAsyncTurns();
+      if (session.winner) break;
+    }
+  });
+
+  assert.ok(session.calledNumbers.includes(numbers[numbers.length - 1]));
+  assert.equal(validateBingoClaim(CARTEL_ID, session.calledNumbers, [], true), true);
+  assert.ok(session.winner);
+  assert.notEqual(session.winner?.error, 'No Bingo');
+  session.clearResetTimer();
+  session.stopCalling();
+});
+
+test('valid incomplete pattern is not Bingo', () => {
+  const numbers = incompleteLineNumbers();
+  assert.equal(validateBingoClaim(CARTEL_ID, numbers, [], true), false);
+  assert.equal(validateBingoClaim(CARTEL_ID, [], [], true), false);
+});
+
+test('multiple cartelas detect the winning cartela only', async () => {
+  const secondCartel = 40;
+  const session = new GameSession('WIN-DETECT-MULTI');
+  const assigned = session.assignCartels(
+    'sock-human',
+    [CARTEL_ID, secondCartel],
+    'TestPlayer',
+    '10001'
+  );
+  assert.equal(assigned.ok, true);
+  session.players.get('sock-human').automatic = true;
+  session.status = 'calling';
+  session._drawLoopToken = 1;
+  session.stakesCharged = true;
+
+  const numbers = winningLineNumbers(CARTEL_ID);
+  const { io } = mockIo();
+
+  await withQueuedDraws(numbers, async () => {
+    for (let i = 0; i < numbers.length; i += 1) {
+      session.callNextBall(io, 1);
+      await flushAsyncTurns();
+      if (session.winner) break;
+    }
+  });
+
+  assert.equal(validateBingoClaim(CARTEL_ID, session.calledNumbers, [], true), true);
+  assert.ok(session.winner);
+  assert.equal(Number(session.winner.cartelId ?? session.winner.primaryCartelId), CARTEL_ID);
+  session.clearResetTimer();
+  session.stopCalling();
+});
+
+test('stale empty manual marks do not block Bingo once the completed line is marked', async () => {
+  const numbers = winningLineNumbers();
+  const session = prepareCallingSession('WIN-DETECT-MARKS');
+  const player = session.players.get('sock-human');
+  player.automatic = false;
+  player.manualMarks = {};
+  const { io } = mockIo();
+
+  await withQueuedDraws(numbers, async () => {
+    for (let i = 0; i < numbers.length; i += 1) {
+      session.callNextBall(io, 1);
+      await flushAsyncTurns();
+    }
+  });
+
+  assert.equal(
+    validateBingoClaim(CARTEL_ID, session.calledNumbers, [], false),
+    false
+  );
+  assert.equal(session.winner, null);
+
+  session.updatePlayerMarks('10001', { [CARTEL_ID]: middleRowMarkKeys() }, false);
+  assert.equal(
+    validateBingoClaim(
+      CARTEL_ID,
+      session.calledNumbers,
+      session.getPlayerCartelMarks(player, CARTEL_ID),
+      false
+    ),
+    true
+  );
+
+  session.tryDeclareHumanBingoAfterBall(io);
+  await flushAsyncTurns();
+
+  assert.ok(session.winner, 'late-arriving marks of a completed line must still be Bingo');
+  assert.notEqual(session.winner?.error, 'No Bingo');
+  session.clearResetTimer();
+  session.stopCalling();
+});
+
+test('completed pattern remains Bingo when the pre-win interceptor would return No Bingo', async () => {
+  const robotEngine = require('../src/services/robotEngine');
+  const original = robotEngine.runPreWinInterceptorForHumanClaim;
+  robotEngine.runPreWinInterceptorForHumanClaim = async () => ({
+    outcome: 'block_human',
+    payload: null,
+  });
+
+  try {
+    const numbers = winningLineNumbers();
+    const session = prepareCallingSession('WIN-DETECT-GATE');
+    const { io } = mockIo();
+
+    await withQueuedDraws(numbers, async () => {
+      for (let i = 0; i < numbers.length; i += 1) {
+        session.callNextBall(io, 1);
+        await flushAsyncTurns();
+        if (session.winner) break;
+      }
+    });
+
+    assert.equal(validateBingoClaim(CARTEL_ID, session.calledNumbers, [], true), true);
+    assert.ok(
+      session.winner,
+      'validated Bingo must be declared even if the interceptor would block_human'
+    );
+    assert.notEqual(session.winner?.error, 'No Bingo');
+    session.clearResetTimer();
+    session.stopCalling();
+  } finally {
+    robotEngine.runPreWinInterceptorForHumanClaim = original;
+  }
+});
+
+test('validateBingoClaim accepts Set or array of called numbers including the last ball', () => {
+  const numbers = winningLineNumbers();
+  assert.equal(validateBingoClaim(CARTEL_ID, numbers, [], true), true);
+  assert.equal(validateBingoClaim(CARTEL_ID, new Set(numbers), [], true), true);
+  assert.equal(
+    validateBingoClaim(CARTEL_ID, numbers.map(String), [], true),
+    true
+  );
+});
+
+test('playerOwnsCartel is not fooled by string vs number cartel ids', () => {
+  const session = prepareCallingSession('WIN-DETECT-OWN');
+  const player = session.players.get('sock-human');
+  player.cartelIds = ['1'];
+  assert.equal(session.playerOwnsCartel(player, 1), true);
+  assert.equal(session.playerOwnsCartel(player, '1'), true);
+  assert.equal(session.playerOwnsCartel(player, 2), false);
+  session.stopCalling();
+});

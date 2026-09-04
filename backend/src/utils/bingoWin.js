@@ -32,9 +32,12 @@ function hasWinningLine(markedKeys) {
 }
 
 function toCalledSet(calledNumbers) {
-  return new Set(
-    (Array.isArray(calledNumbers) ? calledNumbers : []).map(Number)
-  );
+  const list = Array.isArray(calledNumbers)
+    ? calledNumbers
+    : calledNumbers instanceof Set
+      ? [...calledNumbers]
+      : [];
+  return new Set(list.map(Number).filter((n) => Number.isFinite(n)));
 }
 
 function toManualMarkSet(manualMarks) {

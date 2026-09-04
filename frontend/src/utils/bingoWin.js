@@ -32,9 +32,13 @@ const WIN_LINES = [
 ];
 
 function toCalledSet(calledNumbers) {
-  return calledNumbers instanceof Set
-    ? calledNumbers
-    : new Set(calledNumbers);
+  const list =
+    calledNumbers instanceof Set
+      ? [...calledNumbers]
+      : Array.isArray(calledNumbers)
+        ? calledNumbers
+        : [];
+  return new Set(list.map(Number).filter((n) => Number.isFinite(n)));
 }
 
 function toManualMarkSet(manualMarks) {
@@ -199,7 +203,10 @@ export function hasFalseBingoClaim(
   if (automatic) return false;
 
   for (const cartelId of cartelIds) {
-    const manual = manualMarksByCartel[cartelId];
+    const manual =
+      manualMarksByCartel?.[cartelId] ??
+      manualMarksByCartel?.[String(cartelId)] ??
+      manualMarksByCartel?.[Number(cartelId)];
     const display = getCartelDisplayMarkedKeys(
       cartelId,
       calledNumbers,
@@ -292,14 +299,11 @@ export function findWinningCartel(
   automatic
 ) {
   for (const cartelId of cartelIds) {
-    if (
-      checkCartelWin(
-        cartelId,
-        calledNumbers,
-        manualMarksByCartel[cartelId],
-        automatic
-      )
-    ) {
+    const marks =
+      manualMarksByCartel?.[cartelId] ??
+      manualMarksByCartel?.[String(cartelId)] ??
+      manualMarksByCartel?.[Number(cartelId)];
+    if (checkCartelWin(cartelId, calledNumbers, marks, automatic)) {
       return cartelId;
     }
   }
