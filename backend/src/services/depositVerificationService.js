@@ -271,16 +271,20 @@ async function verifyAndCreditDeposit(input = {}, deps = {}) {
 
   const qbirrExpectedAmount =
     requestedAmount ?? extractReceiptAmountHint(input.reference);
-  if (qbirrExpectedAmount == null) {
+  // Telebirr may be submitted as a reference number only (no SMS amount).
+  // CBE still requires an amount from the typed value or receipt text.
+  if (qbirrExpectedAmount == null && provider !== TELEBIRR_PROVIDER) {
     return fail('invalid_amount');
   }
 
   const qbirrPayload = {
     provider: receiver.provider,
     ref: reference,
-    amount: qbirrExpectedAmount,
     receiver_name: receiver.receiverName,
   };
+  if (qbirrExpectedAmount != null) {
+    qbirrPayload.amount = qbirrExpectedAmount;
+  }
   if (receiver.provider === CBE_PROVIDER) {
     qbirrPayload.receiver_account = receiver.receiverAccount;
   }
@@ -303,9 +307,9 @@ async function verifyAndCreditDeposit(input = {}, deps = {}) {
           provider: receiver.provider,
           paymentMethod: receiver.provider,
           source,
-          requestedAmount: requestedAmount ?? qbirrExpectedAmount,
-          submittedAmount: requestedAmount ?? qbirrExpectedAmount,
-          amount: requestedAmount ?? qbirrExpectedAmount,
+          requestedAmount: requestedAmount ?? qbirrExpectedAmount ?? 0,
+          submittedAmount: requestedAmount ?? qbirrExpectedAmount ?? 0,
+          amount: requestedAmount ?? qbirrExpectedAmount ?? 0,
           status: 'rejected',
           walletCredited: false,
           receivingNumber: receiver.receivingNumber,
@@ -382,9 +386,9 @@ async function verifyAndCreditDeposit(input = {}, deps = {}) {
         provider: receiver.provider,
         paymentMethod: receiver.provider,
         source,
-        requestedAmount: requestedAmount ?? qbirrExpectedAmount,
-        submittedAmount: requestedAmount ?? qbirrExpectedAmount,
-        amount: requestedAmount ?? qbirrExpectedAmount,
+        requestedAmount: requestedAmount ?? qbirrExpectedAmount ?? verifiedAmount,
+        submittedAmount: requestedAmount ?? qbirrExpectedAmount ?? verifiedAmount,
+        amount: requestedAmount ?? qbirrExpectedAmount ?? verifiedAmount,
         verifiedAmount,
         status: 'pending',
         walletCredited: false,
@@ -544,6 +548,7 @@ async function persistRejected({
   reason,
   verifiedAmount = null,
 }) {
+  const recordedAmount = toAmount(requestedAmount) ?? 0;
   const set = {
     status: 'rejected',
     walletCredited: false,
@@ -568,9 +573,9 @@ async function persistRejected({
       provider: receiver.provider,
       paymentMethod: receiver.provider,
       source,
-      requestedAmount,
-      submittedAmount: requestedAmount,
-      amount: requestedAmount,
+      requestedAmount: recordedAmount,
+      submittedAmount: recordedAmount,
+      amount: recordedAmount,
       receivingNumber: receiver.receivingNumber,
       receiverName: receiver.receiverName,
       receiverAccount: receiver.receiverAccount || '',

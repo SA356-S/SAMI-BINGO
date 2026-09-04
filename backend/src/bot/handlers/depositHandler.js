@@ -85,7 +85,7 @@ function formatTelebirrInstructions(account) {
     `💬 የክፍያ ችግር ካለ፣ ${supportHandle()} ይጠቀሙ፡፡`,
     '',
     '------------------------------',
-    '📩 After sending payment, please paste the SMS confirmation below 👇',
+    '📩 After sending payment, paste the SMS confirmation or only the transaction / reference number below 👇',
     'You can paste multiple times if needed.',
   ].join('\n');
 }
@@ -287,7 +287,7 @@ async function handleReceiptText(ctx) {
     await ctx.reply(
       s.provider === 'cbe'
         ? 'እባክዎ የCBE Birr SMS / receipt መልእክት ሙሉ በሙሉ ይለጥፉ።'
-        : 'እባክዎ የTelebirr SMS / receipt መልእክት ሙሉ በሙሉ ይለጥፉ።'
+        : 'እባክዎ የTelebirr SMS ይለጥፉ ወይም የግብይት / Transaction ቁጥር ብቻ ያስገቡ።'
     );
     return true;
   }

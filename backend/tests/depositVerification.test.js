@@ -416,6 +416,92 @@ test('Telebirr SMS paste extracts reference and amount hint', () => {
   ].join(' ');
   assert.equal(extractTelebirrReference(sms), 'CKI5ABC12XY');
   assert.equal(extractReceiptAmountHint(sms), 50);
+  assert.equal(extractTelebirrReference('CKI5ABC12XY'), 'CKI5ABC12XY');
+  assert.equal(extractTelebirrReference('CE123456789'), 'CE123456789');
+  assert.equal(extractReceiptAmountHint('CKI5ABC12XY'), null);
+});
+
+test('Telebirr reference-number-only input attempts qbirr and credits the verified amount', async () => {
+  const wallets = new Map();
+  const deps = createMemoryDeps(async (payload) => {
+    assert.equal(payload.provider, 'telebirr');
+    assert.equal(payload.ref, 'CKI5ABC12XY');
+    assert.equal(payload.receiver_name, 'WASIHUN');
+    return {
+      ok: true,
+      qbirr: { verified: true, payer: 'ABEBE', amount: 75, error: '' },
+    };
+  }, wallets);
+
+  const result = await verifyAndCreditDeposit(
+    {
+      userId: '4101',
+      provider: 'telebirr',
+      receivingNumber: '0979596741',
+      reference: 'CKI5ABC12XY',
+      source: 'bot',
+    },
+    deps
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.verifiedAmount, 75);
+  assert.equal(wallets.get('4101').play, 75);
+  assert.equal(deps.qbirrCalls.length, 1);
+  assert.equal(deps.deposits.get('CKI5ABC12XY').walletCredited, true);
+});
+
+test('unknown Telebirr reference-number-only is rejected after qbirr', async () => {
+  const wallets = new Map();
+  const deps = createMemoryDeps(async (payload) => {
+    assert.equal(payload.ref, 'CKI5UNKNOWNX');
+    return {
+      ok: false,
+      error: 'verification_failed',
+      qbirr: { verified: false, payer: '', amount: null, error: 'not found' },
+    };
+  }, wallets);
+
+  const result = await verifyAndCreditDeposit(
+    {
+      userId: '4102',
+      provider: 'telebirr',
+      receivingNumber: '0979596741',
+      reference: 'CKI5UNKNOWNX',
+      source: 'bot',
+    },
+    deps
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'verification_failed');
+  assert.equal(deps.qbirrCalls.length, 1);
+  assert.equal(wallets.get('4102'), undefined);
+});
+
+test('duplicate Telebirr reference-number-only does not credit twice', async () => {
+  const wallets = new Map();
+  const deps = createMemoryDeps(async () => ({
+    ok: true,
+    qbirr: { verified: true, payer: 'ABEBE', amount: 80, error: '' },
+  }), wallets);
+  const payload = {
+    userId: '4103',
+    provider: 'telebirr',
+    receivingNumber: '0979596741',
+    reference: 'CE4103ONLY',
+    source: 'bot',
+  };
+
+  const first = await verifyAndCreditDeposit(payload, deps);
+  const second = await verifyAndCreditDeposit(payload, deps);
+
+  assert.equal(first.ok, true);
+  assert.equal(first.verifiedAmount, 80);
+  assert.equal(second.ok, false);
+  assert.equal(second.error, 'transaction_already_processed');
+  assert.equal(wallets.get('4103').play, 80);
+  assert.equal(deps.qbirrCalls.length, 1);
 });
 
 test('Telebirr deposit without typed amount credits the qbirr verified amount', async () => {
