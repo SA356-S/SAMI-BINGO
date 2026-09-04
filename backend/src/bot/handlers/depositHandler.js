@@ -54,10 +54,8 @@ function pruneExpiredStates() {
 
 function getMethodKeyboard() {
   return Markup.inlineKeyboard([
-    [
-      Markup.button.callback('🔴 Telebirr', 'deposit:method:telebirr'),
-      Markup.button.callback('🔴 CBEBirr', 'deposit:method:cbe'),
-    ],
+    [Markup.button.callback('Telebirr', 'deposit:method:telebirr')],
+    [Markup.button.callback('CBE Birr', 'deposit:method:cbe')],
   ]);
 }
 
@@ -65,12 +63,12 @@ function supportHandle() {
   return SUPPORT_CONTACTS[0]?.label || '@Capital_bingoo';
 }
 
+function formatTopUpPrompt() {
+  return '💰 የተቀማጭ ገንዘብ መጠን በ ETB ያስገቡ (ቁጥር ብቻ)። ለምሳሌ፡ 10';
+}
+
 function formatDepositChooser() {
-  return [
-    '<b>💳 Deposit / Top-Up</b>',
-    '',
-    'Please choose your preferred payment method below:',
-  ].join('\n');
+  return 'የክፍያ አማራጭ ይምረጡ፦';
 }
 
 function formatTelebirrInstructions(account) {
@@ -170,11 +168,8 @@ async function beginDeposit(ctx) {
     /* optional */
   }
   clearState(userId);
-  setState(userId, { step: 'await_method', amount: null, provider: null, receivingNumber: null });
-  await ctx.reply(formatDepositChooser(), {
-    parse_mode: 'HTML',
-    ...getMethodKeyboard(),
-  });
+  setState(userId, { step: 'await_amount', amount: null, provider: null, receivingNumber: null });
+  await ctx.reply(formatTopUpPrompt());
 }
 
 async function startDeposit(ctx) {
@@ -182,16 +177,28 @@ async function startDeposit(ctx) {
   await beginDeposit(ctx);
 }
 
+async function proceedToPaymentMethods(ctx, userId, amount) {
+  setState(userId, {
+    step: 'await_method',
+    amount,
+    provider: null,
+    receivingNumber: null,
+  });
+  await ctx.reply(`መጠን: ${amount} ETB\n\n${formatDepositChooser()}`, {
+    ...getMethodKeyboard(),
+  });
+}
+
 async function handleAmountText(ctx) {
   const userId = ctx.from?.id;
   if (!userId) return false;
 
   const s = getState(userId);
-  if (!s || s.step !== 'await_amount' || !s.provider) return false;
+  if (!s || s.step !== 'await_amount') return false;
 
   const n = Number(String(ctx.message?.text || '').trim().replace(/,/g, ''));
   if (!Number.isFinite(n) || n <= 0) {
-    await ctx.reply('እባክዎ ትክክለኛ መጠን ያስገቡ (ለምሳሌ 50)።');
+    await ctx.reply('እባክዎ ትክክለኛ መጠን ያስገቡ (ለምሳሌ 10)።');
     return true;
   }
   if (n < MIN_DEPOSIT_AMOUNT) {
@@ -199,14 +206,7 @@ async function handleAmountText(ctx) {
     return true;
   }
 
-  setState(userId, {
-    ...s,
-    step: 'await_reference',
-    amount: n,
-  });
-  await ctx.reply(
-    `መጠን: ${n} ETB\n\nክፍያውን ከፈጸሙ በኋላ የግብይት / Transaction ቁጥር ያስገቡ።`
-  );
+  await proceedToPaymentMethods(ctx, userId, n);
   return true;
 }
 
@@ -215,7 +215,7 @@ async function chooseMethod(ctx, methodKey) {
   if (!userId) return;
 
   const s = getState(userId);
-  if (!s || s.step !== 'await_method') {
+  if (!s || s.step !== 'await_method' || s.amount == null) {
     clearState(userId);
     await ctx.reply('እንደገና ለመጀመር Deposit ቁልፍን ይንኩ።');
     return;
@@ -236,7 +236,7 @@ async function chooseMethod(ctx, methodKey) {
     }
     setState(userId, {
       step: 'await_receipt',
-      amount: null,
+      amount: s.amount,
       provider: 'telebirr',
       receivingNumber: account.displayNumber || account.number,
     });
@@ -251,7 +251,7 @@ async function chooseMethod(ctx, methodKey) {
 
   setState(userId, {
     step: 'await_receipt',
-    amount: null,
+    amount: s.amount,
     provider: 'cbe',
     receivingNumber: cbeDisplayAccount(methods.cbe),
   });
@@ -420,5 +420,6 @@ module.exports = {
   formatCbeInstructions,
   formatTelebirrInstructions,
   formatDepositChooser,
+  formatTopUpPrompt,
   cbeDisplayAccount,
 };

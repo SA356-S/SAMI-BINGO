@@ -622,10 +622,21 @@ test('missing QBIRR_API_KEY returns deposit_not_configured without calling qbirr
 });
 
 test('CBEBirr instruction card matches the deposit reference layout', () => {
-  const { formatCbeInstructions, formatDepositChooser } = require('../src/bot/handlers/depositHandler');
+  const {
+    formatCbeInstructions,
+    formatDepositChooser,
+    formatTopUpPrompt,
+  } = require('../src/bot/handlers/depositHandler');
+  const topUp = formatTopUpPrompt();
+  assert.match(topUp, /💰/);
+  assert.match(topUp, /የተቀማጭ ገንዘብ መጠን በ ETB ያስገቡ/);
+  assert.match(topUp, /ለምሳሌ፡ 10/);
+  assert.doesNotMatch(topUp, /ለምሳሌ፡ 50/);
+  assert.doesNotMatch(topUp, /መጠን: 50/);
+
   const chooser = formatDepositChooser();
-  assert.match(chooser, /Deposit \/ Top-Up/);
-  assert.match(chooser, /Please choose your preferred payment method below:/);
+  assert.match(chooser, /የክፍያ አማራጭ ይምረጡ፦/);
+  assert.doesNotMatch(chooser, /Telebirr|CBE|CBEBirr/);
 
   const text = formatCbeInstructions({
     number: '0904165498',
