@@ -16,6 +16,8 @@ const settingsSchema = new mongoose.Schema(
     /** One-time first approved deposit bonus — admin controlled */
     firstDepositBonusEnabled: { type: Boolean, default: false },
     firstDepositBonusPercent: { type: Number, default: 100 },
+    /** Telegram bot Manual Deposit command — independent of automatic deposits */
+    manualDepositEnabled: { type: Boolean, default: true },
   },
   { timestamps: true, collection: 'settings' }
 );

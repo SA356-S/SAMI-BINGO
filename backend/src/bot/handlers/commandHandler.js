@@ -6,22 +6,32 @@ const { handleWithdrawCommand } = require('./withdrawHandler');
 const { processStartReferral } = require('../../services/referralService');
 const { findByTelegramId, isRegistered } = require('../../services/telegramUserService');
 const { beginRegistration } = require('./registerHandler');
+const settingsService = require('../../services/settingsService');
 
-const HELP_MESSAGE = [
-  '📖 Capital Bingo Bot Help',
-  '',
-  '/start — Open the bot',
-  '/register — Register your phone number',
-  '/balance — Main & play wallet balances',
-  '/withdraw — Withdraw from main wallet',
-  '/manualdeposit — Manual deposit (screenshot)',
-  '/invite — Invite friends & earn rewards',
-  '/instruction — Bingo game instructions',
-  '/support — Contact support',
-  '/help — This message',
-  '',
-  'After /start, use the inline buttons for Play, Deposit, Balance, and more.',
-].join('\n');
+function buildHelpMessage(manualDepositEnabled = true) {
+  const lines = [
+    '📖 Capital Bingo Bot Help',
+    '',
+    '/start — Open the bot',
+    '/register — Register your phone number',
+    '/balance — Main & play wallet balances',
+    '/withdraw — Withdraw from main wallet',
+  ];
+  if (manualDepositEnabled) {
+    lines.push('/manualdeposit — Manual deposit (screenshot)');
+  }
+  lines.push(
+    '/invite — Invite friends & earn rewards',
+    '/instruction — Bingo game instructions',
+    '/support — Contact support',
+    '/help — This message',
+    '',
+    'After /start, use the inline buttons for Play, Deposit, Balance, and more.'
+  );
+  return lines.join('\n');
+}
+
+const HELP_MESSAGE = buildHelpMessage(true);
 
 const BOT_COMMANDS = [
   { command: 'start', description: 'Start' },
@@ -49,7 +59,8 @@ async function handleStartCommand(ctx) {
 }
 
 async function handleHelpCommand(ctx) {
-  await ctx.reply(HELP_MESSAGE, welcomeReply());
+  const { manualDepositEnabled } = await settingsService.getManualDepositSettings();
+  await ctx.reply(buildHelpMessage(manualDepositEnabled), welcomeReply());
 }
 
 /**
@@ -132,9 +143,20 @@ function registerCommandHandlers(bot) {
   });
 }
 
+function getActiveBotCommandsSync(manualDepositEnabled = true) {
+  if (manualDepositEnabled) return BOT_COMMANDS;
+  return BOT_COMMANDS.filter((item) => item.command !== 'manualdeposit');
+}
+
+async function getActiveBotCommands() {
+  const { manualDepositEnabled } = await settingsService.getManualDepositSettings();
+  return getActiveBotCommandsSync(manualDepositEnabled);
+}
+
 async function setupBotCommands(bot) {
   try {
-    await bot.telegram.setMyCommands(BOT_COMMANDS);
+    const commands = await getActiveBotCommands();
+    await bot.telegram.setMyCommands(commands);
   } catch (err) {
     console.warn('[bot] setMyCommands failed:', err?.message || err);
   }
@@ -156,4 +178,7 @@ module.exports = {
   handleHelpCommand,
   HELP_MESSAGE,
   BOT_COMMANDS,
+  getActiveBotCommands,
+  getActiveBotCommandsSync,
+  buildHelpMessage,
 };

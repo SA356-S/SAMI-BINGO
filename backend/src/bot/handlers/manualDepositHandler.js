@@ -7,7 +7,14 @@ const {
   submitManualDeposit,
   parseAmountFromText,
 } = require('../../services/manualDepositService');
+const settingsService = require('../../services/settingsService');
 const { SUPPORT_CONTACTS } = require('./supportHandler');
+
+const MANUAL_DEPOSIT_UNAVAILABLE_MESSAGE = [
+  '⏸️ Manual Deposit is temporarily unavailable.',
+  '',
+  'Please use /deposit for automatic Telebirr or CBE Birr deposit.',
+].join('\n');
 
 const MANUAL_STATE_TTL_MS = 30 * 60 * 1000;
 const manualState = new Map();
@@ -156,9 +163,22 @@ function clearOtherFlows(userId) {
   }
 }
 
+async function isManualDepositEnabled() {
+  const { manualDepositEnabled } = await settingsService.getManualDepositSettings();
+  return manualDepositEnabled;
+}
+
+async function rejectIfDisabled(ctx, userId) {
+  if (await isManualDepositEnabled()) return false;
+  if (userId != null) clearManualDepositState(userId);
+  await ctx.reply(MANUAL_DEPOSIT_UNAVAILABLE_MESSAGE);
+  return true;
+}
+
 async function beginManualDeposit(ctx) {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (await rejectIfDisabled(ctx, userId)) return;
 
   pruneExpiredStates();
   clearOtherFlows(userId);
@@ -179,6 +199,7 @@ async function handleManualDepositText(ctx) {
 
   const s = getState(userId);
   if (!s || s.step !== 'await_photo') return false;
+  if (await rejectIfDisabled(ctx, userId)) return true;
 
   const text = String(ctx.message?.text || '').trim();
   if (text.startsWith('/')) return false;
@@ -204,6 +225,7 @@ async function handleManualDepositPhoto(ctx) {
 
   const s = getState(userId);
   if (!s || s.step !== 'await_photo') return false;
+  if (await rejectIfDisabled(ctx, userId)) return true;
 
   const photo = photoFromMessage(ctx.message);
   if (!photo) return false;
@@ -228,6 +250,12 @@ async function handleManualDepositPhoto(ctx) {
     await ctx.reply(
       '⏳ አስቀድመው pending Manual Deposit አለዎት። Admin እስኪያረጋግጥ ይጠብቁ።'
     );
+    return true;
+  }
+
+  if (!result.ok && result.error === 'manual_deposit_disabled') {
+    clearManualDepositState(userId);
+    await ctx.reply(MANUAL_DEPOSIT_UNAVAILABLE_MESSAGE);
     return true;
   }
 
@@ -298,4 +326,5 @@ module.exports = {
   clearManualDepositState,
   photoFromMessage,
   parseAmountFromText,
+  MANUAL_DEPOSIT_UNAVAILABLE_MESSAGE,
 };

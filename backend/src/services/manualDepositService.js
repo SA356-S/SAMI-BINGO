@@ -14,6 +14,7 @@ const {
 } = require('./telegramBotNotify');
 const userRoleService = require('./userRoleService');
 const { isPanelRole } = require('../constants/roles');
+const settingsService = require('./settingsService');
 
 const MSG_APPROVED = (amount) =>
   [
@@ -175,6 +176,14 @@ function createDefaultDeps() {
   };
 }
 
+async function isManualDepositEnabled(deps = {}) {
+  if (typeof deps.isEnabled === 'function') {
+    return Boolean(await deps.isEnabled());
+  }
+  const settings = await settingsService.getManualDepositSettings();
+  return settings.manualDepositEnabled;
+}
+
 async function submitManualDeposit(params = {}, deps = createDefaultDeps()) {
   const userId = String(params.userId || '').trim();
   if (!userId) {
@@ -184,6 +193,10 @@ async function submitManualDeposit(params = {}, deps = createDefaultDeps()) {
   const photoFileId = String(params.photoFileId || '').trim();
   if (!photoFileId) {
     return { ok: false, error: 'photo_required' };
+  }
+
+  if (!(await isManualDepositEnabled(deps))) {
+    return { ok: false, error: 'manual_deposit_disabled' };
   }
 
   if (typeof deps.findPendingByUser !== 'function' && !isDbReady()) {

@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS = {
   registrationBonusAmount: 0,
   firstDepositBonusEnabled: false,
   firstDepositBonusPercent: 100,
+  manualDepositEnabled: true,
 };
 
 const memorySettings = { ...DEFAULT_SETTINGS };
@@ -37,7 +38,10 @@ async function getSettings() {
       { upsert: true, new: true, lean: true }
     );
     Object.assign(memorySettings, doc);
-    return { ...doc };
+    if (doc.manualDepositEnabled == null) {
+      memorySettings.manualDepositEnabled = DEFAULT_SETTINGS.manualDepositEnabled;
+    }
+    return { ...memorySettings };
   }
   return { ...DEFAULT_SETTINGS, ...memorySettings };
 }
@@ -247,6 +251,50 @@ async function updateRobotAdvantageLevel(level) {
   return buildRobotAdvantagePreview(robotAdvantageLevel);
 }
 
+function resolveManualDepositEnabled(value) {
+  if (value == null) return true;
+  return Boolean(value);
+}
+
+function buildManualDepositPayload(enabled) {
+  return {
+    manualDepositEnabled: resolveManualDepositEnabled(enabled),
+  };
+}
+
+async function getManualDepositSettings() {
+  await getSettings();
+  return buildManualDepositPayload(memorySettings.manualDepositEnabled);
+}
+
+function getManualDepositSettingsSync() {
+  return buildManualDepositPayload(memorySettings.manualDepositEnabled);
+}
+
+async function updateManualDepositSettings({ enabled } = {}) {
+  if (enabled === undefined) {
+    return getManualDepositSettings();
+  }
+
+  const patch = { manualDepositEnabled: Boolean(enabled) };
+
+  if (isDbReady()) {
+    const doc = await SettingsModel.findOneAndUpdate(
+      { settingsId: DEFAULT_SETTINGS.settingsId },
+      { $set: patch, $setOnInsert: { settingsId: DEFAULT_SETTINGS.settingsId } },
+      { upsert: true, new: true, lean: true }
+    );
+    Object.assign(memorySettings, doc);
+    if (memorySettings.manualDepositEnabled == null) {
+      memorySettings.manualDepositEnabled = true;
+    }
+  } else {
+    Object.assign(memorySettings, patch);
+  }
+
+  return buildManualDepositPayload(memorySettings.manualDepositEnabled);
+}
+
 module.exports = {
   getSettings,
   getSettingsSync,
@@ -263,4 +311,7 @@ module.exports = {
   getFirstDepositBonusSettings,
   getFirstDepositBonusSettingsSync,
   updateFirstDepositBonusSettings,
+  getManualDepositSettings,
+  getManualDepositSettingsSync,
+  updateManualDepositSettings,
 };

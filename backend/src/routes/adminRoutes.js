@@ -32,6 +32,7 @@ const {
   getManualDepositScreenshot,
   isValidObjectId,
 } = require('../services/manualDepositService');
+const settingsService = require('../services/settingsService');
 
 const robotManagementService = require('../services/robotManagementService');
 const robotConfigService = require('../services/robotConfigService');
@@ -281,6 +282,43 @@ function manualDepositHttpStatus(error) {
   if (error === 'not_found' || error === 'photo_missing') return 404;
   return 400;
 }
+
+function refreshBotCommandsBestEffort() {
+  try {
+    const { refreshBotCommands } = require('../bot');
+    Promise.resolve(refreshBotCommands()).catch((err) => {
+      console.warn('[admin] refreshBotCommands failed', err?.message || err);
+    });
+  } catch (err) {
+    console.warn('[admin] refreshBotCommands unavailable', err?.message || err);
+  }
+}
+
+router.get('/manual-deposits/settings', requireAdminOrManager, async (_req, res) => {
+  try {
+    const data = await settingsService.getManualDepositSettings();
+    res.json({ ok: true, ...data });
+  } catch (err) {
+    console.error('[admin] manual-deposit settings get error', err);
+    res.status(500).json({ ok: false, error: 'manual_deposit_settings_failed' });
+  }
+});
+
+router.put('/manual-deposits/settings', requireAdminOrManager, async (req, res) => {
+  try {
+    if (typeof req.body?.manualDepositEnabled !== 'boolean') {
+      return res.status(400).json({ ok: false, error: 'manualDepositEnabled_required' });
+    }
+    const data = await settingsService.updateManualDepositSettings({
+      enabled: req.body.manualDepositEnabled,
+    });
+    refreshBotCommandsBestEffort();
+    res.json({ ok: true, ...data });
+  } catch (err) {
+    console.error('[admin] manual-deposit settings put error', err);
+    res.status(500).json({ ok: false, error: 'manual_deposit_settings_update_failed' });
+  }
+});
 
 router.get('/manual-deposits', requireAdminOrManager, async (req, res) => {
   try {

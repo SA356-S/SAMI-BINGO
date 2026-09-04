@@ -152,7 +152,12 @@ async function launchBot() {
   return bot;
 }
 
-module.exports = { launchBot, createBot };
+async function refreshBotCommands() {
+  if (!botInstance) return;
+  await setupBotCommands(botInstance);
+}
+
+module.exports = { launchBot, createBot, refreshBotCommands };
 
 if (require.main === module) {
   launchBot().catch((err) => {

@@ -6,9 +6,11 @@ import {
   CONNECTING_MESSAGE,
   fetchManualDeposits,
   fetchManualDepositScreenshot,
+  fetchManualDepositSettings,
   fetchWithStartupRetry,
   getApiErrorMessage,
   rejectManualDeposit,
+  updateManualDepositSettings,
 } from '../services/api';
 
 type StatusFilter = 'all' | ManualDepositStatus;
@@ -246,6 +248,10 @@ export default function ManualDepositsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [lightboxSrc, setLightboxSrc] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState('');
   const initialLoadRef = useRef(true);
 
   const applyPayload = useCallback((payload: ManualDepositsResponse) => {
@@ -299,6 +305,48 @@ export default function ManualDepositsPage() {
     };
   }, [filter, loadRequests]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setSettingsLoading(true);
+    fetchManualDepositSettings()
+      .then((data) => {
+        if (cancelled) return;
+        setEnabled(Boolean(data.manualDepositEnabled));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(getApiErrorMessage(err, 'Failed to load Manual Deposit setting.'));
+      })
+      .finally(() => {
+        if (!cancelled) setSettingsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleToggleEnabled = async (next: boolean) => {
+    const previous = enabled;
+    setEnabled(next);
+    setSettingsSaving(true);
+    setSettingsMessage('');
+    setError('');
+    try {
+      const data = await updateManualDepositSettings({ manualDepositEnabled: next });
+      setEnabled(Boolean(data.manualDepositEnabled));
+      setSettingsMessage(
+        data.manualDepositEnabled
+          ? 'Manual Deposit is ON. Users can submit requests from the Telegram bot.'
+          : 'Manual Deposit is OFF. Automatic deposit is unchanged.'
+      );
+    } catch (err) {
+      setEnabled(previous);
+      setError(getApiErrorMessage(err, 'Failed to update Manual Deposit setting.'));
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
   const handleApprove = async (id: string) => {
     const amount = Number(String(amountDrafts[id] || '').trim());
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -342,6 +390,41 @@ export default function ManualDepositsPage() {
 
   return (
     <div className="space-y-4">
+      <PanelCard
+        title="Manual Deposit availability"
+        subtitle="ON/OFF for Telegram bot Manual Deposit only — automatic Telebirr/CBE deposits stay unchanged"
+      >
+        {settingsLoading ? (
+          <p className="text-sm text-slate-400">Loading setting…</p>
+        ) : (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-white">Manual Deposit</p>
+              <p className="text-xs text-slate-400">
+                When OFF, the bot hides Manual Deposit and rejects new requests. Pending
+                approvals still work.
+              </p>
+            </div>
+            <label className="flex cursor-pointer items-center gap-3">
+              <input
+                type="checkbox"
+                checked={enabled}
+                disabled={settingsSaving}
+                onChange={(event) => {
+                  void handleToggleEnabled(event.target.checked);
+                }}
+              />
+              <span className="text-sm font-bold text-white">
+                {enabled ? 'ON' : 'OFF'}
+              </span>
+            </label>
+          </div>
+        )}
+        {settingsMessage ? (
+          <p className="mt-3 text-sm text-emerald-300">{settingsMessage}</p>
+        ) : null}
+      </PanelCard>
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatPill label="Pending" value={stats.pending} />
         <StatPill label="Approved" value={stats.approved} />

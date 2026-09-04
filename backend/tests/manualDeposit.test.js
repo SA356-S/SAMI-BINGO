@@ -10,6 +10,8 @@ process.env.DEPOSIT_CBEBIRR_NUMBER =
   process.env.DEPOSIT_CBEBIRR_NUMBER || '0911223344';
 process.env.DEPOSIT_CBEBIRR_RECEIVER_NAME =
   process.env.DEPOSIT_CBEBIRR_RECEIVER_NAME || 'CAPITAL BINGO';
+process.env.DEPOSIT_CBEBIRR_ACCOUNT =
+  process.env.DEPOSIT_CBEBIRR_ACCOUNT || '1000017692643';
 
 const {
   submitManualDeposit,
@@ -21,8 +23,18 @@ const {
 const {
   formatManualDepositInstructions,
   photoFromMessage,
+  handleManualDepositCommand,
+  handleManualDepositPhoto,
+  clearManualDepositState,
+  MANUAL_DEPOSIT_UNAVAILABLE_MESSAGE,
 } = require('../src/bot/handlers/manualDepositHandler');
-const { BOT_COMMANDS } = require('../src/bot/handlers/commandHandler');
+const {
+  BOT_COMMANDS,
+  getActiveBotCommands,
+  buildHelpMessage,
+} = require('../src/bot/handlers/commandHandler');
+const settingsService = require('../src/services/settingsService');
+const { verifyAndCreditDeposit } = require('../src/services/depositVerificationService');
 
 function createMemoryDeps() {
   const rows = new Map();
@@ -119,6 +131,9 @@ function createMemoryDeps() {
         buffer: Buffer.from(`photo:${fileId}`),
         contentType: 'image/jpeg',
       };
+    },
+    async isEnabled() {
+      return true;
     },
     async verifyQbirr() {
       qbirrCalls.push(true);
@@ -307,4 +322,222 @@ test('manual deposit service never requires qbirr or automatic verification', ()
   assert.doesNotMatch(serviceSrc, /require\(['"][^'"]*depositVerificationService/);
   assert.doesNotMatch(handlerSrc, /require\(['"][^'"]*qbirr/i);
   assert.doesNotMatch(handlerSrc, /verifyAndCreditDeposit/);
+});
+
+test('Manual Deposit setting persists ON/OFF in the existing settings service', async () => {
+  const original = settingsService.getManualDepositSettingsSync().manualDepositEnabled;
+  try {
+    const on = await settingsService.updateManualDepositSettings({ enabled: true });
+    assert.equal(on.manualDepositEnabled, true);
+    const off = await settingsService.updateManualDepositSettings({ enabled: false });
+    assert.equal(off.manualDepositEnabled, false);
+    assert.equal(settingsService.getManualDepositSettingsSync().manualDepositEnabled, false);
+    const loaded = await settingsService.getManualDepositSettings();
+    assert.equal(loaded.manualDepositEnabled, false);
+  } finally {
+    await settingsService.updateManualDepositSettings({ enabled: original !== false });
+  }
+});
+
+test('submit succeeds when Manual Deposit is ON and is rejected when OFF', async () => {
+  const deps = createMemoryDeps();
+  const on = await submitManualDeposit(
+    { userId: 'on-user', photoFileId: 'file-on' },
+    deps
+  );
+  assert.equal(on.ok, true);
+  assert.equal(on.request.status, 'pending');
+
+  deps.isEnabled = async () => false;
+  const off = await submitManualDeposit(
+    { userId: 'off-user', photoFileId: 'file-off' },
+    deps
+  );
+  assert.equal(off.ok, false);
+  assert.equal(off.error, 'manual_deposit_disabled');
+  assert.equal(await deps.findPendingByUser('off-user'), null);
+});
+
+test('approve still works while Manual Deposit is OFF', async () => {
+  const deps = createMemoryDeps();
+  const created = await submitManualDeposit(
+    { userId: 'keep-approve', submittedAmount: 40, photoFileId: 'file-keep' },
+    deps
+  );
+  deps.isEnabled = async () => false;
+  const approved = await approveManualDeposit(
+    created.request.id,
+    { amount: 40, actorTelegramId: 9, actorRole: 'admin' },
+    deps
+  );
+  assert.equal(approved.ok, true);
+  assert.equal(approved.credited, 40);
+  assert.equal(deps.wallets.get('keep-approve').play, 40);
+});
+
+test('direct /manualdeposit is rejected while OFF and starts the existing flow while ON', async () => {
+  await settingsService.updateManualDepositSettings({ enabled: true });
+  const onReplies = [];
+  await handleManualDepositCommand({
+    from: { id: 7001 },
+    reply: async (text) => {
+      onReplies.push(text);
+    },
+  });
+  assert.match(onReplies[0], /Manual Deposit/);
+  clearManualDepositState(7001);
+
+  await settingsService.updateManualDepositSettings({ enabled: false });
+  try {
+    const offReplies = [];
+    await handleManualDepositCommand({
+      from: { id: 7002 },
+      reply: async (text) => {
+        offReplies.push(text);
+      },
+    });
+    assert.equal(offReplies[0], MANUAL_DEPOSIT_UNAVAILABLE_MESSAGE);
+    assert.match(offReplies[0], /temporarily unavailable/i);
+    assert.match(offReplies[0], /\/deposit/);
+  } finally {
+    await settingsService.updateManualDepositSettings({ enabled: true });
+  }
+});
+
+test('in-progress photo is not stored when Manual Deposit is turned OFF', async () => {
+  await settingsService.updateManualDepositSettings({ enabled: true });
+  await handleManualDepositCommand({
+    from: { id: 7003 },
+    reply: async () => {},
+  });
+  await settingsService.updateManualDepositSettings({ enabled: false });
+  try {
+    const replies = [];
+    const handled = await handleManualDepositPhoto({
+      from: { id: 7003 },
+      reply: async (text) => {
+        replies.push(text);
+      },
+      message: {
+        photo: [{ file_id: 'should-not-save', width: 100, height: 100 }],
+      },
+    });
+    assert.equal(handled, true);
+    assert.equal(replies[0], MANUAL_DEPOSIT_UNAVAILABLE_MESSAGE);
+  } finally {
+    await settingsService.updateManualDepositSettings({ enabled: true });
+    clearManualDepositState(7003);
+  }
+});
+
+test('Telegram command list and help hide manualdeposit when OFF', async () => {
+  await settingsService.updateManualDepositSettings({ enabled: false });
+  try {
+    const commands = await getActiveBotCommands();
+    assert.equal(
+      commands.some((item) => item.command === 'manualdeposit'),
+      false
+    );
+    assert.ok(commands.some((item) => item.command === 'deposit'));
+    const help = buildHelpMessage(false);
+    assert.doesNotMatch(help, /manualdeposit/);
+  } finally {
+    await settingsService.updateManualDepositSettings({ enabled: true });
+  }
+  const onCommands = await getActiveBotCommands();
+  assert.ok(onCommands.some((item) => item.command === 'manualdeposit'));
+  assert.match(buildHelpMessage(true), /manualdeposit/);
+});
+
+test('automatic Telebirr deposit still credits when Manual Deposit is OFF', async () => {
+  await settingsService.updateManualDepositSettings({ enabled: false });
+  try {
+    const wallets = new Map();
+    const deposits = new Map();
+    const qbirrCalls = [];
+    const result = await verifyAndCreditDeposit(
+      {
+        userId: 'auto-off',
+        provider: 'telebirr',
+        receivingNumber: '0979596741',
+        reference: 'CEMANUALOFF1',
+        amount: 120,
+        source: 'bot',
+      },
+      {
+        applyFirstDepositBonus: false,
+        verifyQbirr: async (payload) => {
+          qbirrCalls.push(payload);
+          return {
+            ok: true,
+            qbirr: { verified: true, payer: 'ABEBE', amount: 120, error: '' },
+          };
+        },
+        findByReference: async (ref) => deposits.get(ref) || null,
+        insertPending: async (doc) => {
+          const row = {
+            ...doc,
+            _id: doc.transactionId,
+            walletCredited: false,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+          deposits.set(doc.transactionId, row);
+          return { ...row };
+        },
+        markStatus: async (ref, set) => {
+          const row = deposits.get(ref);
+          if (!row) return null;
+          Object.assign(row, set, { updatedAt: new Date() });
+          return { ...row };
+        },
+        claimForCredit: async (ref) => {
+          const row = deposits.get(ref);
+          if (!row || row.walletCredited || row.status === 'approved') return null;
+          row.status = 'pending';
+          return { ...row };
+        },
+        creditWallet: async (userId, amount) => {
+          const current = wallets.get(userId) || { play: 0, main: 0 };
+          current.play += amount;
+          wallets.set(userId, current);
+          return { ok: true, wallet: { ...current }, credited: amount };
+        },
+        recordTx: async () => null,
+        getWallet: async (userId) => {
+          const current = wallets.get(userId) || { play: 0, main: 0 };
+          return { playWallet: current.play, mainWallet: current.main };
+        },
+      }
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.verifiedAmount, 120);
+    assert.equal(wallets.get('auto-off').play, 120);
+    assert.equal(qbirrCalls[0].provider, 'telebirr');
+  } finally {
+    await settingsService.updateManualDepositSettings({ enabled: true });
+  }
+});
+
+test('automatic deposit modules do not read the Manual Deposit flag', () => {
+  const verificationSrc = fs.readFileSync(
+    path.resolve(__dirname, '../src/services/depositVerificationService.js'),
+    'utf8'
+  );
+  const depositHandlerSrc = fs.readFileSync(
+    path.resolve(__dirname, '../src/bot/handlers/depositHandler.js'),
+    'utf8'
+  );
+  const qbirrSrc = fs.readFileSync(
+    path.resolve(__dirname, '../src/services/qbirrClient.js'),
+    'utf8'
+  );
+  const bonusSrc = fs.readFileSync(
+    path.resolve(__dirname, '../src/services/firstDepositBonusService.js'),
+    'utf8'
+  );
+  for (const src of [verificationSrc, depositHandlerSrc, qbirrSrc, bonusSrc]) {
+    assert.doesNotMatch(src, /manualDepositEnabled/);
+    assert.doesNotMatch(src, /getManualDepositSettings/);
+  }
 });

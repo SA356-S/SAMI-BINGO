@@ -28,6 +28,7 @@ import type {
   WithdrawRequestsResponse,
   WithdrawRequestStatus,
   ManualDepositsResponse,
+  ManualDepositSettings,
   ManualDepositStatus,
   DailyProfitSummary,
   FinancialSummary,
@@ -413,6 +414,21 @@ export async function approveWithdrawRequest(requestId: string) {
 export async function rejectWithdrawRequest(requestId: string) {
   const { data } = await api.post<{ ok: boolean; request?: unknown; error?: string }>(
     `/admin/withdraw-requests/${encodeURIComponent(requestId)}/reject`
+  );
+  return data;
+}
+
+export async function fetchManualDepositSettings() {
+  const { data } = await api.get<ManualDepositSettings>('/admin/manual-deposits/settings');
+  return data;
+}
+
+export async function updateManualDepositSettings(payload: {
+  manualDepositEnabled: boolean;
+}) {
+  const { data } = await api.put<ManualDepositSettings>(
+    '/admin/manual-deposits/settings',
+    payload
   );
   return data;
 }

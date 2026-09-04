@@ -115,6 +115,11 @@ export interface ManualDepositsResponse {
   stats: ManualDepositStats;
 }
 
+export interface ManualDepositSettings {
+  ok?: boolean;
+  manualDepositEnabled: boolean;
+}
+
 export interface FinancialPeriodStats {
   depositTotal: number;
   depositCount: number;
