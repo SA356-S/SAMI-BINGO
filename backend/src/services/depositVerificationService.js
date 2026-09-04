@@ -107,6 +107,12 @@ function toAmount(value) {
   return Math.round(amount * 100) / 100;
 }
 
+const MIN_DEPOSIT_AMOUNT = 10;
+
+function isBelowMinDeposit(amount) {
+  return Number.isFinite(amount) && amount < MIN_DEPOSIT_AMOUNT;
+}
+
 function amountsMatch(requested, verified) {
   if (!Number.isFinite(requested) || !Number.isFinite(verified)) return false;
   return Math.round(requested * 100) === Math.round(verified * 100);
@@ -118,6 +124,7 @@ const USER_ERRORS = {
   invalid_request: 'Please check the deposit details and try again.',
   invalid_reference: 'Enter a valid transaction / reference number.',
   invalid_amount: 'Enter a valid deposit amount.',
+  amount_below_minimum: 'Minimum deposit amount is 10 ETB.',
   unknown_receiving_number: 'That Telebirr receiving number is not configured.',
   missing_receiver_configuration: 'Deposits are temporarily unavailable. Please try again later.',
   deposit_not_configured: 'Deposits are temporarily unavailable. Please try again later.',
@@ -136,6 +143,7 @@ const AMHARIC_ERRORS = {
   invalid_request: '❌ የተቀማጭ መረጃውን ያስተካክሉ።',
   invalid_reference: '❌ ትክክለኛ የግብይት ቁጥር ያስገቡ።',
   invalid_amount: '❌ ትክክለኛ መጠን ያስገቡ።',
+  amount_below_minimum: 'Minimum deposit amount is 10 ETB.',
   unknown_receiving_number: '❌ ይህ የTelebirr ቁጥር አልተዋቀረም።',
   missing_receiver_configuration: '❌ ተቀማጭ ጊዜያዊ unavailable ነው። ቆይተው ይሞክሩ።',
   deposit_not_configured: '❌ ተቀማጭ ጊዜያዊ unavailable ነው። ቆይተው ይሞክሩ።',
@@ -276,6 +284,9 @@ async function verifyAndCreditDeposit(input = {}, deps = {}) {
   if (qbirrExpectedAmount == null && provider !== TELEBIRR_PROVIDER) {
     return fail('invalid_amount');
   }
+  if (isBelowMinDeposit(requestedAmount) || isBelowMinDeposit(qbirrExpectedAmount)) {
+    return fail('amount_below_minimum');
+  }
 
   const qbirrPayload = {
     provider: receiver.provider,
@@ -360,6 +371,21 @@ async function verifyAndCreditDeposit(input = {}, deps = {}) {
       reason: 'verification_failed',
     });
     return fail('verification_failed');
+  }
+  if (isBelowMinDeposit(verifiedAmount)) {
+    await persistRejected({
+      d,
+      existing,
+      userId,
+      reference,
+      receiver,
+      source,
+      requestedAmount: requestedAmount ?? qbirrExpectedAmount ?? verifiedAmount,
+      qbirr,
+      reason: 'amount_below_minimum',
+      verifiedAmount,
+    });
+    return fail('amount_below_minimum');
   }
   if (requestedAmount != null && !amountsMatch(requestedAmount, verifiedAmount)) {
     await persistRejected({
@@ -601,4 +627,5 @@ module.exports = {
   extractReceiptAmountHint,
   toAmount,
   amountsMatch,
+  MIN_DEPOSIT_AMOUNT,
 };

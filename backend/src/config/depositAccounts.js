@@ -14,6 +14,13 @@ function pick(...values) {
   return '';
 }
 
+/** Display-only: first token of a configured receiver name. */
+function displayFirstName(fullName) {
+  const text = String(fullName ?? '').trim();
+  if (!text) return '';
+  return text.split(/\s+/)[0];
+}
+
 function digitsOnly(value) {
   return String(value ?? '').replace(/\D/g, '');
 }
@@ -262,6 +269,7 @@ module.exports = {
   CBE_PROVIDER,
   digitsOnly,
   phoneKey,
+  displayFirstName,
   parseTelebirrAccounts,
   getTelebirrAccounts,
   getTelebirrRotationMs,

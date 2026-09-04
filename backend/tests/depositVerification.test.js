@@ -17,9 +17,16 @@ const {
   getCbeConfig,
   getPublicDepositMethods,
   phoneKey,
+  displayFirstName,
 } = require('../src/config/depositAccounts');
 const { verifyWithQbirr } = require('../src/services/qbirrClient');
-const { verifyAndCreditDeposit, extractTelebirrReference, extractCbeReference, extractReceiptAmountHint } = require('../src/services/depositVerificationService');
+const {
+  verifyAndCreditDeposit,
+  extractTelebirrReference,
+  extractCbeReference,
+  extractReceiptAmountHint,
+  getDepositErrorMessage,
+} = require('../src/services/depositVerificationService');
 const depositRoutes = require('../src/routes/depositRoutes');
 const botDepositRoutes = require('../src/routes/botDepositRoutes');
 const depositHandler = require('../src/bot/handlers/depositHandler');
@@ -632,6 +639,117 @@ test('CBEBirr instruction card matches the deposit reference layout', () => {
   assert.match(text, /የ CBEBirr አካውንት/);
   assert.match(text, /paste the SMS confirmation below/);
   assert.match(text, /Name:/);
-  assert.match(text, /CAPITAL BINGO/);
+  assert.match(text, /Name:<\/b> CAPITAL/);
+  assert.doesNotMatch(text, /CAPITAL BINGO/);
   assert.doesNotMatch(text, /Number:/);
+});
+
+test('displayFirstName shows only the first name of a full receiver name', () => {
+  assert.equal(displayFirstName('Wasihun Kemal Ali'), 'Wasihun');
+  assert.equal(displayFirstName('WASIHUN ADUGNA GETAHUN'), 'WASIHUN');
+  assert.equal(displayFirstName('CAPITAL BINGO'), 'CAPITAL');
+  assert.equal(displayFirstName('  tamirat  '), 'tamirat');
+});
+
+test('Telebirr instruction shows first name only and keeps the existing phone number', () => {
+  const { formatTelebirrInstructions } = require('../src/bot/handlers/depositHandler');
+  const text = formatTelebirrInstructions({
+    number: '0979596741',
+    displayNumber: '0979596741',
+    receiverName: 'Wasihun Kemal Ali',
+  });
+  assert.match(text, /Name:<\/b> Wasihun/);
+  assert.doesNotMatch(text, /Kemal/);
+  assert.doesNotMatch(text, /Ali/);
+  assert.match(text, /Phone:/);
+  assert.match(text, /0979596741/);
+  assert.doesNotMatch(text, /Account:/);
+});
+
+test('CBE Birr instruction keeps existing payment information and first name only', () => {
+  const { formatCbeInstructions } = require('../src/bot/handlers/depositHandler');
+  const text = formatCbeInstructions({
+    number: '0904165498',
+    account: '1000017692643',
+    receiverName: 'WASIHUN ADUGNA GETAHUN',
+  });
+  assert.match(text, /Name:<\/b> WASIHUN/);
+  assert.doesNotMatch(text, /WASIHUN ADUGNA GETAHUN/);
+  assert.doesNotMatch(text, /ADUGNA/);
+  assert.doesNotMatch(text, /GETAHUN/);
+  assert.match(text, /Account:/);
+  assert.match(text, /0904165498/);
+});
+
+test('9.99 ETB deposit is rejected before Qbirr', async () => {
+  const wallets = new Map([['min1', { play: 0, main: 0 }]]);
+  const deps = createMemoryDeps(async () => {
+    throw new Error('qbirr should not be called for amount below minimum');
+  }, wallets);
+
+  const result = await verifyAndCreditDeposit(
+    {
+      userId: 'min1',
+      provider: 'telebirr',
+      receivingNumber: '0979596741',
+      reference: 'CEBELOWMIN99',
+      amount: 9.99,
+      source: 'miniapp',
+    },
+    deps
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'amount_below_minimum');
+  assert.equal(getDepositErrorMessage(result.error), 'Minimum deposit amount is 10 ETB.');
+  assert.equal(deps.qbirrCalls.length, 0);
+  assert.equal(wallets.get('min1').play, 0);
+});
+
+test('10 ETB deposit is accepted', async () => {
+  const wallets = new Map();
+  const deps = createMemoryDeps(async () => ({
+    ok: true,
+    qbirr: { verified: true, payer: 'ABEBE', amount: 10, error: '' },
+  }), wallets);
+
+  const result = await verifyAndCreditDeposit(
+    {
+      userId: 'min10',
+      provider: 'telebirr',
+      receivingNumber: '0979596741',
+      reference: 'CEMIN10OK01',
+      amount: 10,
+      source: 'miniapp',
+    },
+    deps
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.verifiedAmount, 10);
+  assert.equal(wallets.get('min10').play, 10);
+});
+
+test('100 ETB deposit is accepted', async () => {
+  const wallets = new Map();
+  const deps = createMemoryDeps(async () => ({
+    ok: true,
+    qbirr: { verified: true, payer: 'ABEBE', amount: 100, error: '' },
+  }), wallets);
+
+  const result = await verifyAndCreditDeposit(
+    {
+      userId: 'min100',
+      provider: 'telebirr',
+      receivingNumber: '0979596741',
+      reference: 'CEMIN100OK1',
+      amount: 100,
+      source: 'miniapp',
+    },
+    deps
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.verifiedAmount, 100);
+  assert.equal(wallets.get('min100').play, 100);
 });

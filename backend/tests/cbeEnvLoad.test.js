@@ -9,6 +9,7 @@ const { normalizeEnv } = require('../src/config/normalizeEnv');
 const {
   getCbeConfig,
   getPublicDepositMethods,
+  displayFirstName,
 } = require('../src/config/depositAccounts');
 const { formatCbeInstructions } = require('../src/bot/handlers/depositHandler');
 const {
@@ -45,7 +46,8 @@ test('CBE aliases DEPOSIT_CBE_NUMBER and DEPOSIT_CBE_RECEIVER_NAME enable CBE', 
   assert.equal(cbe.receiverName, 'WASIHUN ADUGNA GETAHUN');
   assert.equal(methods.cbe.enabled, true);
   assert.match(card, /0904165498/);
-  assert.match(card, /WASIHUN ADUGNA GETAHUN/);
+  assert.match(card, /Name:<\/b> WASIHUN/);
+  assert.doesNotMatch(card, /WASIHUN ADUGNA GETAHUN/);
 });
 
 test('loadEnv reads backend/.env and CBE aliases from that file', () => {
@@ -113,8 +115,12 @@ test('loadEnv reads backend/.env and CBE aliases from that file', () => {
       account: cbe.receiverAccount,
       receiverName: cbe.receiverName,
     });
+    const firstName = displayFirstName(cbe.receiverName);
     assert.match(card, new RegExp(cbe.number.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.match(card, new RegExp(cbe.receiverName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(card, new RegExp(firstName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    if (cbe.receiverName !== firstName) {
+      assert.doesNotMatch(card, new RegExp(cbe.receiverName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    }
     return;
   }
 

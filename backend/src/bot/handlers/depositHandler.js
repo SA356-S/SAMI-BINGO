@@ -7,6 +7,7 @@ const {
   getRotatedTelebirrAccount,
   findTelebirrAccount,
   getPublicDepositMethods,
+  displayFirstName,
 } = require('../../config/depositAccounts');
 const {
   verifyAndCreditDeposit,
@@ -14,6 +15,7 @@ const {
   formatDepositSuccessMessage,
   extractTelebirrReference,
   extractCbeReference,
+  MIN_DEPOSIT_AMOUNT,
 } = require('../../services/depositVerificationService');
 const { SUPPORT_CONTACTS } = require('./supportHandler');
 
@@ -73,9 +75,15 @@ function formatDepositChooser() {
 
 function formatTelebirrInstructions(account) {
   const number = account.displayNumber || account.number;
-  return [
+  const firstName = displayFirstName(account.receiverName);
+  const lines = [
     '<b>🏦 Telebirr Deposit</b>',
-    `<b>Account:</b> <code>${number}</code>`,
+  ];
+  if (firstName) {
+    lines.push(`<b>Name:</b> ${firstName}`);
+  }
+  lines.push(
+    `<b>Phone:</b> <code>${number}</code>`,
     '',
     '<b>📱 Telebirr Deposit Steps</b>',
     '1️⃣ ከላይ ባለው የ Telebirr አካውንት ገንዘቡን ያስገቡ።',
@@ -86,8 +94,9 @@ function formatTelebirrInstructions(account) {
     '',
     '------------------------------',
     '📩 After sending payment, paste the SMS confirmation or only the transaction / reference number below 👇',
-    'You can paste multiple times if needed.',
-  ].join('\n');
+    'You can paste multiple times if needed.'
+  );
+  return lines.join('\n');
 }
 
 function cbeDisplayAccount(cbe) {
@@ -101,7 +110,7 @@ function formatCbeInstructions(cbe) {
     `<b>Account:</b> <code>${accountValue}</code>`,
   ];
   if (cbe?.receiverName) {
-    lines.push(`<b>Name:</b> ${cbe.receiverName}`);
+    lines.push(`<b>Name:</b> ${displayFirstName(cbe.receiverName)}`);
   }
   lines.push(
     '',
@@ -183,6 +192,10 @@ async function handleAmountText(ctx) {
   const n = Number(String(ctx.message?.text || '').trim().replace(/,/g, ''));
   if (!Number.isFinite(n) || n <= 0) {
     await ctx.reply('እባክዎ ትክክለኛ መጠን ያስገቡ (ለምሳሌ 50)።');
+    return true;
+  }
+  if (n < MIN_DEPOSIT_AMOUNT) {
+    await ctx.reply('Minimum deposit amount is 10 ETB.');
     return true;
   }
 
@@ -311,6 +324,11 @@ async function handleReceiptText(ctx) {
     return true;
   }
 
+  if (!result.ok && result.error === 'amount_below_minimum') {
+    await ctx.reply(getDepositRejectionMessage(result.error));
+    return true;
+  }
+
   clearState(userId);
 
   if (!result.ok) {
@@ -400,6 +418,7 @@ module.exports = {
   verifyAndCreditDeposit,
   getRotatedTelebirrAccount,
   formatCbeInstructions,
+  formatTelebirrInstructions,
   formatDepositChooser,
   cbeDisplayAccount,
 };

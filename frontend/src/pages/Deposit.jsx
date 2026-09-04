@@ -7,6 +7,15 @@ const PROVIDERS = [
   { id: 'cbe', label: '🔴 CBEBirr' },
 ];
 
+const MIN_DEPOSIT_AMOUNT = 10;
+const MIN_DEPOSIT_MESSAGE = 'Minimum deposit amount is 10 ETB.';
+
+function displayFirstName(fullName) {
+  const text = String(fullName ?? '').trim();
+  if (!text) return '';
+  return text.split(/\s+/)[0];
+}
+
 function cbeDisplayAccount(cbe) {
   return cbe?.number || cbe?.account || '';
 }
@@ -49,7 +58,7 @@ export default function Deposit({ activeScreen, onNavigate }) {
   const payTo = useMemo(() => {
     if (provider === 'cbe') {
       return {
-        name: cbe?.receiverName || '—',
+        name: displayFirstName(cbe?.receiverName) || '—',
         number: cbeAccount || '—',
         account: cbe?.account || '',
       };
@@ -58,7 +67,7 @@ export default function Deposit({ activeScreen, onNavigate }) {
       telebirrAccounts.find((account) => account.number === receivingNumber) ||
       telebirrAccounts[0];
     return {
-      name: selected?.receiverName || '—',
+      name: displayFirstName(selected?.receiverName) || '—',
       number: selected?.number || '—',
       account: '',
     };
@@ -82,6 +91,10 @@ export default function Deposit({ activeScreen, onNavigate }) {
       const parsedAmount = Number(String(amount).replace(/,/g, '').trim());
       if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
         setError('Enter a valid amount.');
+        return;
+      }
+      if (parsedAmount < MIN_DEPOSIT_AMOUNT) {
+        setError(MIN_DEPOSIT_MESSAGE);
         return;
       }
       if (!receivingNumber) {
@@ -188,7 +201,7 @@ export default function Deposit({ activeScreen, onNavigate }) {
                   >
                     {telebirrAccounts.map((account) => (
                       <option key={account.number} value={account.number}>
-                        {account.number} — {account.receiverName}
+                        {account.number} — {displayFirstName(account.receiverName)}
                       </option>
                     ))}
                   </select>
@@ -237,7 +250,7 @@ export default function Deposit({ activeScreen, onNavigate }) {
                         Account: <span className="tabular-nums">{cbeAccount}</span>
                       </p>
                       {cbe?.receiverName ? (
-                        <p>Name: {cbe.receiverName}</p>
+                        <p>Name: {displayFirstName(cbe.receiverName)}</p>
                       ) : null}
                       <p className="mt-3 font-bold">📱 CBEBirr Deposit Steps</p>
                       <p className="mt-1">1️⃣ ከላይ ባለው የ CBEBirr አካውንት ገንዘቡን ያስገቡ።</p>
