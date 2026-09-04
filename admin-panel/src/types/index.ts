@@ -92,6 +92,8 @@ export interface ManualDepositRow {
   amount: number | null;
   photoFileId: string;
   photoCaption: string;
+  hadReceipt?: boolean;
+  screenshotAvailable?: boolean;
   status: ManualDepositStatus;
   walletCredited: boolean;
   screenshotUrl: string;

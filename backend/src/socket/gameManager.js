@@ -9,6 +9,11 @@ const {
 const { runDeferred } = require('../utils/eventLoopDefer');
 
 const DEBUG_BINGO_DRAW = process.env.DEBUG_BINGO_DRAW === 'true';
+const VERBOSE_GAME_LOGS = process.env.DEBUG_GAME === 'true';
+
+function logLobbyDiag(...args) {
+  if (VERBOSE_GAME_LOGS) console.info(...args);
+}
 const {
   BALL_INTERVAL_MS,
   GAME_ENTRY_STAKE,
@@ -160,7 +165,7 @@ class GameSession {
   restartLobbyCountdownLoop(diagReason = 'unspecified') {
     const snapshot = this._lobbyCartelaDiag();
     if (this.status !== 'waiting') {
-      console.info('[lobby-diag] restartLobbyCountdownLoop SKIPPED', {
+      logLobbyDiag('[lobby-diag] restartLobbyCountdownLoop SKIPPED', {
         diagReason,
         skipBecause: 'status_not_waiting',
         ...snapshot,
@@ -168,13 +173,13 @@ class GameSession {
       return;
     }
     const durationSec = settingsService.getCardSelectionTimeSync();
-    console.info('[lobby-diag] restartLobbyCountdownLoop ARM', {
+    logLobbyDiag('[lobby-diag] restartLobbyCountdownLoop ARM', {
       diagReason,
       durationSec,
       ...snapshot,
     });
     this.armLobbyCountdown(durationSec);
-    console.info('[lobby-diag] restartLobbyCountdownLoop DONE', {
+    logLobbyDiag('[lobby-diag] restartLobbyCountdownLoop DONE', {
       diagReason,
       newCountdownEndsAt: this.lobbyCountdownEndsAt,
       newCountdownRemaining: this.getLobbyCountdownRemaining(),
@@ -972,12 +977,14 @@ class GameSession {
       }
     }
 
-    console.info('[bingo-draw] drawn number', {
-      gameId: this.gameId,
-      number: next,
-      sequence: this.ballSequence,
-      calledCount: this.calledNumbers.length,
-    });
+    if (VERBOSE_GAME_LOGS || DEBUG_BINGO_DRAW) {
+      console.info('[bingo-draw] drawn number', {
+        gameId: this.gameId,
+        number: next,
+        sequence: this.ballSequence,
+        calledCount: this.calledNumbers.length,
+      });
+    }
     if (DEBUG_BINGO_DRAW) {
       console.info('[bingo-draw] number sent to clients', {
         gameId: this.gameId,
@@ -1011,7 +1018,7 @@ class GameSession {
       }
     });
 
-    if (!DEBUG_BINGO_DRAW) {
+    if (VERBOSE_GAME_LOGS && !DEBUG_BINGO_DRAW) {
       console.log(
         `[game] ball:called gameId=${this.gameId} ${formatBallCall(next)} seq=${this.ballSequence}`
       );
@@ -1071,7 +1078,7 @@ class GameSession {
     const diag = this._lobbyCartelaDiag();
     const lobby = gameManager.getLobbySession();
     if (this !== lobby) {
-      console.info('[lobby-diag] startCalling delegate to lobby.ensureBallCaller', {
+      logLobbyDiag('[lobby-diag] startCalling delegate to lobby.ensureBallCaller', {
         path: 'not_lobby_session',
         thisGameId: this.gameId,
         lobbyGameId: lobby?.gameId,
@@ -1082,21 +1089,21 @@ class GameSession {
     }
 
     if (this.status === 'calling' && this.drawTimer) {
-      console.info('[lobby-diag] startCalling RETURN', {
+      logLobbyDiag('[lobby-diag] startCalling RETURN', {
         path: 'already_running_with_draw_timer',
         ...diag,
       });
       return { ok: true, alreadyRunning: true };
     }
     if (this.status === 'calling' && !this.drawTimer) {
-      console.info('[lobby-diag] startCalling resumeBallCaller', {
+      logLobbyDiag('[lobby-diag] startCalling resumeBallCaller', {
         path: 'calling_without_draw_timer',
         ...diag,
       });
       return this.resumeBallCaller(io);
     }
     if (this._ballCallerStarting) {
-      console.info('[lobby-diag] startCalling RETURN', {
+      logLobbyDiag('[lobby-diag] startCalling RETURN', {
         path: 'ball_caller_starting_in_flight',
         ...diag,
       });
@@ -1109,7 +1116,7 @@ class GameSession {
       : this.canStartCalling();
 
     if (!canStart) {
-      console.info('[lobby-diag] startCalling RETURN false', {
+      logLobbyDiag('[lobby-diag] startCalling RETURN false', {
         path: 'cannot_start_yet',
         forceStart,
         hasReadyPlayersForStart: this.hasReadyPlayersForStart(),
@@ -1139,7 +1146,7 @@ class GameSession {
       console.log(
         `[game] ball caller started gameId=${this.gameId} interval=${BALL_INTERVAL_MS}ms players=${this.playersCount} token=${loopToken}`
       );
-      console.info('[lobby-diag] startCalling SUCCESS → status=calling', {
+      logLobbyDiag('[lobby-diag] startCalling SUCCESS → status=calling', {
         path: 'ball_caller_started',
         loopToken,
         ...this._lobbyCartelaDiag(),
@@ -1859,10 +1866,10 @@ class GameSession {
 
   handleLobbyCountdownExpired(io) {
     const enterDiag = this._lobbyCartelaDiag();
-    console.info('[lobby-diag] handleLobbyCountdownExpired ENTER', enterDiag);
+    logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired ENTER', enterDiag);
 
     if (this.status !== 'waiting') {
-      console.info('[lobby-diag] handleLobbyCountdownExpired SKIP', {
+      logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired SKIP', {
         reason: 'status_not_waiting',
         ...enterDiag,
       });
@@ -1875,30 +1882,30 @@ class GameSession {
       ensureRobotsJoinBeforeRoundStart(io, this, getRuntimeMap());
     } catch (err) {
       console.warn('[lobby] pre-start robot sync failed', err?.message || err);
-      console.info('[lobby-diag] handleLobbyCountdownExpired robot-sync-error', {
+      logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired robot-sync-error', {
         error: err?.message || String(err),
         ...this._lobbyCartelaDiag(),
       });
     }
 
     const afterRobotDiag = this._lobbyCartelaDiag();
-    console.info('[lobby-diag] handleLobbyCountdownExpired after-robot-sync', afterRobotDiag);
+    logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired after-robot-sync', afterRobotDiag);
 
     const totalCartelas = afterRobotDiag.totalCartelas;
     if (totalCartelas >= MIN_TOTAL_CARTELAS_TO_START) {
-      console.info('[lobby-diag] handleLobbyCountdownExpired attempting tryStartLobbyGame', {
+      logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired attempting tryStartLobbyGame', {
         totalCartelas,
         minRequired: MIN_TOTAL_CARTELAS_TO_START,
         ...afterRobotDiag,
       });
       const started = this.tryStartLobbyGame(io, { fromCountdownExpiry: true });
       if (started) {
-        console.info('[lobby-diag] handleLobbyCountdownExpired SUCCESS → calling/main-game', {
+        logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired SUCCESS → calling/main-game', {
           ...this._lobbyCartelaDiag(),
         });
         return;
       }
-      console.info('[lobby-diag] handleLobbyCountdownExpired RESTART because tryStartLobbyGame returned false', {
+      logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired RESTART because tryStartLobbyGame returned false', {
         restartReason: 'try_start_returned_false',
         ...this._lobbyCartelaDiag(),
       });
@@ -1906,7 +1913,7 @@ class GameSession {
       return;
     }
 
-    console.info('[lobby-diag] handleLobbyCountdownExpired RESTART because insufficient total cartelas', {
+    logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired RESTART because insufficient total cartelas', {
       restartReason: 'insufficient_total_cartelas',
       totalCartelas,
       minRequired: MIN_TOTAL_CARTELAS_TO_START,
@@ -1926,7 +1933,7 @@ class GameSession {
     const fromCountdownExpiry = options.fromCountdownExpiry === true;
 
     if (this.status !== 'waiting') {
-      console.info('[lobby-diag] tryStartLobbyGame RETURN false', {
+      logLobbyDiag('[lobby-diag] tryStartLobbyGame RETURN false', {
         path: 'status_not_waiting',
         fromCountdownExpiry,
         ...diag,
@@ -1934,7 +1941,7 @@ class GameSession {
       return false;
     }
     if (!fromCountdownExpiry && this.getLobbyCountdownRemaining() > 0) {
-      console.info('[lobby-diag] tryStartLobbyGame RETURN false', {
+      logLobbyDiag('[lobby-diag] tryStartLobbyGame RETURN false', {
         path: 'countdown_still_running',
         fromCountdownExpiry,
         countdownRemaining: this.getLobbyCountdownRemaining(),
@@ -1943,7 +1950,7 @@ class GameSession {
       return false;
     }
     if (!this.hasMinimumCartelasToStart()) {
-      console.info('[lobby-diag] tryStartLobbyGame RETURN false', {
+      logLobbyDiag('[lobby-diag] tryStartLobbyGame RETURN false', {
         path: 'below_minimum_cartelas',
         fromCountdownExpiry,
         ...diag,
@@ -1957,7 +1964,7 @@ class GameSession {
     const startResult = chargeAndStartSession(this, io, { forceStart: true });
 
     if (!startResult.ok) {
-      console.info('[lobby-diag] tryStartLobbyGame RETURN false', {
+      logLobbyDiag('[lobby-diag] tryStartLobbyGame RETURN false', {
         path: 'charge_and_start_failed',
         fromCountdownExpiry,
         chargeError: startResult.error ?? null,
@@ -2009,7 +2016,7 @@ class GameSession {
     }
 
     this.emitLobbyGameStarted(io, ready);
-    console.info('[lobby-diag] tryStartLobbyGame RETURN true → emitLobbyGameStarted', {
+    logLobbyDiag('[lobby-diag] tryStartLobbyGame RETURN true → emitLobbyGameStarted', {
       path: 'success',
       fromCountdownExpiry,
       startResult: {

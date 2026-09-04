@@ -11,11 +11,14 @@ const manualDepositSchema = new mongoose.Schema(
     submittedAmount: { type: Number, default: null, min: 0 },
     approvedAmount: { type: Number, default: null, min: 0 },
 
-    photoFileId: { type: String, required: true },
+    /** Telegram file_id only while pending. Cleared after approve/reject. */
+    photoFileId: { type: String, default: '' },
     photoFileUniqueId: { type: String, default: '' },
     photoWidth: { type: Number, default: null },
     photoHeight: { type: Number, default: null },
     photoCaption: { type: String, default: '' },
+    hadReceipt: { type: Boolean, default: false },
+    receiptClearedAt: { type: Date, default: null },
 
     status: {
       type: String,

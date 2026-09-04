@@ -27,12 +27,14 @@ function defaultStats(robotId, username = '') {
 async function loadRobotStats(robotId, { username = '' } = {}) {
   const id = String(robotId);
   if (isDbReady()) {
-    const doc = await RobotStatsModel.findOneAndUpdate(
-      { robotId: id },
-      { $setOnInsert: defaultStats(id, username) },
-      { upsert: true, new: true, lean: true }
-    );
-    return doc;
+    const doc = await RobotStatsModel.findOne({ robotId: id }).lean();
+    if (doc) {
+      if (username && doc.username !== username) {
+        return { ...doc, username };
+      }
+      return doc;
+    }
+    return defaultStats(id, username);
   }
 
   if (!memoryStats.has(id)) {

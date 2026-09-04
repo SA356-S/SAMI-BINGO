@@ -25,25 +25,47 @@ const DEFAULT_SETTINGS = {
 };
 
 const memorySettings = { ...DEFAULT_SETTINGS };
+const SETTINGS_CACHE_MS = 30_000;
+let settingsLoadedAt = 0;
 
 function isDbReady() {
   return mongoose.connection?.readyState === 1;
 }
 
-async function getSettings() {
-  if (isDbReady()) {
-    const doc = await SettingsModel.findOneAndUpdate(
-      { settingsId: DEFAULT_SETTINGS.settingsId },
-      { $setOnInsert: DEFAULT_SETTINGS },
-      { upsert: true, new: true, lean: true }
-    );
-    Object.assign(memorySettings, doc);
-    if (doc.manualDepositEnabled == null) {
-      memorySettings.manualDepositEnabled = DEFAULT_SETTINGS.manualDepositEnabled;
-    }
-    return { ...memorySettings };
+function snapshotSettings() {
+  if (memorySettings.manualDepositEnabled == null) {
+    memorySettings.manualDepositEnabled = DEFAULT_SETTINGS.manualDepositEnabled;
   }
   return { ...DEFAULT_SETTINGS, ...memorySettings };
+}
+
+function rememberSettings(doc) {
+  if (doc) Object.assign(memorySettings, doc);
+  if (memorySettings.manualDepositEnabled == null) {
+    memorySettings.manualDepositEnabled = DEFAULT_SETTINGS.manualDepositEnabled;
+  }
+  settingsLoadedAt = Date.now();
+}
+
+async function getSettings() {
+  if (isDbReady()) {
+    if (settingsLoadedAt > 0 && Date.now() - settingsLoadedAt < SETTINGS_CACHE_MS) {
+      return snapshotSettings();
+    }
+    let doc = await SettingsModel.findOne({
+      settingsId: DEFAULT_SETTINGS.settingsId,
+    }).lean();
+    if (!doc) {
+      doc = await SettingsModel.findOneAndUpdate(
+        { settingsId: DEFAULT_SETTINGS.settingsId },
+        { $setOnInsert: DEFAULT_SETTINGS },
+        { upsert: true, new: true, lean: true }
+      );
+    }
+    rememberSettings(doc);
+    return snapshotSettings();
+  }
+  return snapshotSettings();
 }
 
 function getSettingsSync() {
@@ -105,9 +127,9 @@ async function updateCardSelectionTime(rawSeconds) {
       { $set: patch, $setOnInsert: { settingsId: DEFAULT_SETTINGS.settingsId } },
       { upsert: true, new: true, lean: true }
     );
-    Object.assign(memorySettings, doc);
+    rememberSettings(doc);
   } else {
-    Object.assign(memorySettings, patch);
+    rememberSettings(patch);
   }
 
   return buildCardSelectionTimePayload(cardSelectionTime);
@@ -191,9 +213,9 @@ async function updateFirstDepositBonusSettings({ enabled, percent } = {}) {
       { $set: patch, $setOnInsert: { settingsId: DEFAULT_SETTINGS.settingsId } },
       { upsert: true, new: true, lean: true }
     );
-    Object.assign(memorySettings, doc);
+    rememberSettings(doc);
   } else {
-    Object.assign(memorySettings, patch);
+    rememberSettings(patch);
   }
 
   return buildFirstDepositBonusPayload(
@@ -222,9 +244,9 @@ async function updateRegistrationBonusSettings({ enabled, amount } = {}) {
       { $set: patch, $setOnInsert: { settingsId: DEFAULT_SETTINGS.settingsId } },
       { upsert: true, new: true, lean: true }
     );
-    Object.assign(memorySettings, doc);
+    rememberSettings(doc);
   } else {
-    Object.assign(memorySettings, patch);
+    rememberSettings(patch);
   }
 
   return buildRegistrationBonusPayload(
@@ -243,9 +265,9 @@ async function updateRobotAdvantageLevel(level) {
       { $set: patch, $setOnInsert: { settingsId: DEFAULT_SETTINGS.settingsId } },
       { upsert: true, new: true, lean: true }
     );
-    Object.assign(memorySettings, doc);
+    rememberSettings(doc);
   } else {
-    Object.assign(memorySettings, patch);
+    rememberSettings(patch);
   }
 
   return buildRobotAdvantagePreview(robotAdvantageLevel);
@@ -284,12 +306,12 @@ async function updateManualDepositSettings({ enabled } = {}) {
       { $set: patch, $setOnInsert: { settingsId: DEFAULT_SETTINGS.settingsId } },
       { upsert: true, new: true, lean: true }
     );
-    Object.assign(memorySettings, doc);
+    rememberSettings(doc);
     if (memorySettings.manualDepositEnabled == null) {
       memorySettings.manualDepositEnabled = true;
     }
   } else {
-    Object.assign(memorySettings, patch);
+    rememberSettings(patch);
   }
 
   return buildManualDepositPayload(memorySettings.manualDepositEnabled);

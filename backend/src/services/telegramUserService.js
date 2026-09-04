@@ -34,14 +34,17 @@ async function syncTelegramProfileFromClient({
   if (lastName) set.lastName = String(lastName).trim();
 
   if (Object.keys(set).length === 0) {
-    const existing = await findByTelegramId(id);
-    if (existing) {
-      console.log('[telegram] DB user loaded', {
-        telegramId: id,
-        username: existing.username,
-        phone: existing.phoneNumber ? '(set)' : '(empty)',
-      });
-    }
+    return findByTelegramId(id);
+  }
+
+  const existing = await findByTelegramId(id);
+  if (
+    existing &&
+    (set.username == null || existing.username === set.username) &&
+    (set.firstName == null || existing.firstName === set.firstName) &&
+    (set.lastName == null || existing.lastName === set.lastName) &&
+    Number(existing.chatId) === id
+  ) {
     return existing;
   }
 
@@ -53,12 +56,6 @@ async function syncTelegramProfileFromClient({
     },
     { upsert: true, new: true, lean: true }
   );
-
-  console.log('[telegram] DB user synced', {
-    telegramId: id,
-    username: user?.username,
-    phone: user?.phoneNumber ? '(set)' : '(empty)',
-  });
 
   return user;
 }

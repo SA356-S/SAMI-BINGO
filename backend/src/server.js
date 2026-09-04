@@ -170,6 +170,17 @@ async function start() {
   await robotConfigService.getConfig();
   await settingsService.getSettings();
   await robotManagementService.listRobots();
+  try {
+    const { clearProcessedManualDepositScreenshots } = require('./services/manualDepositService');
+    const cleared = await clearProcessedManualDepositScreenshots();
+    if (cleared.modifiedCount > 0) {
+      console.log(
+        `[manual-deposit] cleared ${cleared.modifiedCount} processed receipt file reference(s)`
+      );
+    }
+  } catch (err) {
+    console.warn('[manual-deposit] processed receipt cleanup failed:', err?.message || err);
+  }
   startRobotEngine(io);
 
   server.on('error', (err) => {

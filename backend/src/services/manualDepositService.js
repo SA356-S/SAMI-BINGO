@@ -72,9 +72,24 @@ function formatDisplayName(row = {}) {
   return name || 'User';
 }
 
+const CLEARED_SCREENSHOT_FIELDS = {
+  photoFileId: '',
+  photoFileUniqueId: '',
+  photoWidth: null,
+  photoHeight: null,
+  photoCaption: '',
+  hadReceipt: true,
+};
+
+function hasStoredScreenshot(row = {}) {
+  return Boolean(String(row.photoFileId || '').trim());
+}
+
 function formatRequestRow(doc) {
   const row = doc?.toObject ? doc.toObject() : doc;
   const id = String(row._id ?? row.id);
+  const screenshotStored = hasStoredScreenshot(row);
+  const hadReceipt = Boolean(row.hadReceipt) || screenshotStored;
   return {
     id,
     userId: row.userId,
@@ -89,18 +104,21 @@ function formatRequestRow(doc) {
       : row.submittedAmount != null
         ? Number(row.submittedAmount) || null
         : null,
-    photoFileId: row.photoFileId || '',
-    photoWidth: row.photoWidth ?? null,
-    photoHeight: row.photoHeight ?? null,
-    photoCaption: row.photoCaption || '',
+    photoFileId: screenshotStored ? String(row.photoFileId) : '',
+    photoWidth: screenshotStored ? (row.photoWidth ?? null) : null,
+    photoHeight: screenshotStored ? (row.photoHeight ?? null) : null,
+    photoCaption: screenshotStored ? (row.photoCaption || '') : '',
+    hadReceipt,
+    screenshotAvailable: screenshotStored,
     status: row.status,
     walletCredited: Boolean(row.walletCredited),
-    screenshotUrl: `/api/admin/manual-deposits/${id}/screenshot`,
+    screenshotUrl: screenshotStored ? `/api/admin/manual-deposits/${id}/screenshot` : '',
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     reviewedAt: row.reviewedAt || null,
     reviewedByTelegramId: row.reviewedByTelegramId || '',
     reviewedByRole: row.reviewedByRole || '',
+    receiptClearedAt: row.receiptClearedAt || null,
   };
 }
 
@@ -160,6 +178,40 @@ async function defaultFindById(id) {
   return ManualDepositModel.findById(id).lean();
 }
 
+/** Clears Telegram file refs only after a final approve/reject. Never matches pending. */
+async function defaultClearProcessedScreenshot(id) {
+  return ManualDepositModel.findOneAndUpdate(
+    {
+      _id: id,
+      status: { $in: ['approved', 'rejected'] },
+      photoFileId: { $gt: '' },
+    },
+    {
+      $set: {
+        ...CLEARED_SCREENSHOT_FIELDS,
+        receiptClearedAt: new Date(),
+      },
+    },
+    { new: true }
+  );
+}
+
+async function defaultClearProcessedScreenshotsBatch() {
+  const result = await ManualDepositModel.updateMany(
+    {
+      status: { $in: ['approved', 'rejected'] },
+      photoFileId: { $gt: '' },
+    },
+    {
+      $set: {
+        ...CLEARED_SCREENSHOT_FIELDS,
+        receiptClearedAt: new Date(),
+      },
+    }
+  );
+  return result;
+}
+
 function createDefaultDeps() {
   return {
     create: defaultCreate,
@@ -169,6 +221,7 @@ function createDefaultDeps() {
     markWalletCredited: defaultMarkWalletCredited,
     claimReject: defaultClaimReject,
     findById: defaultFindById,
+    clearProcessedScreenshot: defaultClearProcessedScreenshot,
     creditWallet: creditDepositAsync,
     recordTx: recordTransaction,
     notifyUser: sendTelegramMessage,
@@ -228,6 +281,8 @@ async function submitManualDeposit(params = {}, deps = createDefaultDeps()) {
       photoWidth: Number.isFinite(Number(params.photoWidth)) ? Number(params.photoWidth) : null,
       photoHeight: Number.isFinite(Number(params.photoHeight)) ? Number(params.photoHeight) : null,
       photoCaption: String(params.photoCaption || '').trim().slice(0, 1024),
+      hadReceipt: true,
+      receiptClearedAt: null,
       status: 'pending',
       walletCredited: false,
     });
@@ -363,6 +418,12 @@ async function approveManualDeposit(requestId, options = {}, deps = createDefaul
     console.warn('[manual-deposit] approve notify failed', err?.message || err);
   });
 
+  if (typeof deps.clearProcessedScreenshot === 'function') {
+    await deps.clearProcessedScreenshot(id).catch((err) => {
+      console.warn('[manual-deposit] screenshot cleanup failed', err?.message || err);
+    });
+  }
+
   const updated = (await deps.findById?.(id)) || claimed;
   updated.walletCredited = true;
   updated.status = 'approved';
@@ -397,9 +458,25 @@ async function rejectManualDeposit(requestId, options = {}, deps = createDefault
     console.warn('[manual-deposit] reject notify failed', err?.message || err);
   });
 
+  if (typeof deps.clearProcessedScreenshot === 'function') {
+    await deps.clearProcessedScreenshot(id).catch((err) => {
+      console.warn('[manual-deposit] screenshot cleanup failed', err?.message || err);
+    });
+  }
+
+  const updated = (await deps.findById?.(id)) || rejected;
   return {
     ok: true,
-    request: formatRequestRow(rejected),
+    request: formatRequestRow(updated),
+  };
+}
+
+async function clearProcessedManualDepositScreenshots() {
+  if (!isDbReady()) return { matchedCount: 0, modifiedCount: 0 };
+  const result = await defaultClearProcessedScreenshotsBatch();
+  return {
+    matchedCount: Number(result?.matchedCount || 0),
+    modifiedCount: Number(result?.modifiedCount || 0),
   };
 }
 
@@ -438,6 +515,7 @@ module.exports = {
   approveManualDeposit,
   rejectManualDeposit,
   getManualDepositScreenshot,
+  clearProcessedManualDepositScreenshots,
   assertOperatorAuthorized,
   formatRequestRow,
   parseAmountFromText,

@@ -104,16 +104,10 @@ async function deliverEndedGameWinnerToSocket(
 function registerSocketHandlers(io) {
   io.use((socket, next) => {
     const resolved = resolveTelegramUserIdFromHandshake(socket.handshake);
-    const initUser = parseInitDataUser(socket.handshake?.auth?.initData);
 
     if (resolved?.userId) {
       socket.data.userId = resolved.userId;
       socket.data.telegramUserId = resolved.userId;
-      console.log('[telegram] websocket user connected', {
-        userId: resolved.userId,
-        source: resolved.source,
-        username: initUser?.username ?? socket.handshake?.auth?.username,
-      });
     }
     next();
   });

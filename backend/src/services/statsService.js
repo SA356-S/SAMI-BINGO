@@ -74,12 +74,9 @@ function ensurePeriod(stats) {
 async function loadStats(userId) {
   const key = String(userId);
   if (isDbReady()) {
-    const doc = await PlayerStatsModel.findOneAndUpdate(
-      { userId: key },
-      { $setOnInsert: defaultStats(key) },
-      { upsert: true, new: true, lean: true }
-    );
-    return ensurePeriod({ ...doc });
+    const doc = await PlayerStatsModel.findOne({ userId: key }).lean();
+    if (doc) return ensurePeriod({ ...doc });
+    return ensurePeriod(defaultStats(key));
   }
 
   if (!memoryStats.has(key)) {

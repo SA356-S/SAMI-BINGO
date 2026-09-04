@@ -110,6 +110,21 @@ function createMemoryDeps() {
       const row = rows.get(id);
       return row ? { ...row } : null;
     },
+    async clearProcessedScreenshot(id) {
+      const row = rows.get(id);
+      if (!row) return null;
+      if (row.status !== 'approved' && row.status !== 'rejected') return null;
+      if (!String(row.photoFileId || '').trim()) return { ...row };
+      row.photoFileId = '';
+      row.photoFileUniqueId = '';
+      row.photoWidth = null;
+      row.photoHeight = null;
+      row.photoCaption = '';
+      row.hadReceipt = true;
+      row.receiptClearedAt = new Date();
+      row.updatedAt = new Date();
+      return { ...row };
+    },
     async creditWallet(userId, amount) {
       credits.push({ userId, amount });
       const current = wallets.get(userId) || { play: 0, main: 0 };
@@ -311,6 +326,61 @@ test('screenshot proxy returns the stored Telegram file bytes', async () => {
   assert.equal(shot.ok, true);
   assert.equal(shot.contentType, 'image/jpeg');
   assert.equal(shot.buffer.toString(), 'photo:file-shot');
+});
+
+test('screenshot cleanup happens only after a final approve or reject', async () => {
+  const deps = createMemoryDeps();
+  const created = await submitManualDeposit(
+    { userId: 'shot-user', submittedAmount: 25, photoFileId: 'file-keep-pending' },
+    deps
+  );
+  assert.equal(created.request.photoFileId, 'file-keep-pending');
+  assert.equal(created.request.screenshotAvailable, true);
+  assert.equal(created.request.hadReceipt, true);
+
+  const pendingShot = await getManualDepositScreenshot(created.request.id, deps);
+  assert.equal(pendingShot.ok, true);
+
+  const skipped = await deps.clearProcessedScreenshot(created.request.id);
+  assert.equal(skipped, null);
+  assert.equal((await deps.findById(created.request.id)).photoFileId, 'file-keep-pending');
+
+  const approved = await approveManualDeposit(
+    created.request.id,
+    { amount: 25, actorTelegramId: 8, actorRole: 'admin' },
+    deps
+  );
+  assert.equal(approved.ok, true);
+  assert.equal(approved.request.status, 'approved');
+  assert.equal(approved.request.approvedAmount, 25);
+  assert.equal(approved.credited, 25);
+  assert.equal(deps.wallets.get('shot-user').play, 25);
+  assert.equal(deps.txns.length, 1);
+  assert.equal(approved.request.photoFileId, '');
+  assert.equal(approved.request.screenshotAvailable, false);
+  assert.equal(approved.request.hadReceipt, true);
+
+  const afterApprove = await getManualDepositScreenshot(created.request.id, deps);
+  assert.equal(afterApprove.ok, false);
+  assert.equal(afterApprove.error, 'photo_missing');
+
+  const rejectCreated = await submitManualDeposit(
+    { userId: 'shot-reject', submittedAmount: 10, photoFileId: 'file-reject-me' },
+    deps
+  );
+  const rejected = await rejectManualDeposit(
+    rejectCreated.request.id,
+    { actorTelegramId: 8, actorRole: 'manager' },
+    deps
+  );
+  assert.equal(rejected.ok, true);
+  assert.equal(rejected.request.status, 'rejected');
+  assert.equal(rejected.request.photoFileId, '');
+  assert.equal(rejected.request.hadReceipt, true);
+  assert.equal(deps.credits.length, 1);
+  const afterReject = await getManualDepositScreenshot(rejectCreated.request.id, deps);
+  assert.equal(afterReject.ok, false);
+  assert.equal(afterReject.error, 'photo_missing');
 });
 
 test('manual deposit service never requires qbirr or automatic verification', () => {

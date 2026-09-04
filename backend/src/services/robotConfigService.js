@@ -4,6 +4,9 @@ const { MAX_CARTELS_PER_PLAYER } = require('../config/constants');
 
 const memoryConfig = { configId: 'singleton' };
 
+const SETTINGS_CACHE_MS = 30_000;
+let configLoadedAt = 0;
+
 function isDbReady() {
   return mongoose.connection?.readyState === 1;
 }
@@ -23,15 +26,28 @@ const DEFAULT_CONFIG = {
 // Ensure sync bank ops always have sane defaults before the first DB load.
 Object.assign(memoryConfig, DEFAULT_CONFIG);
 
+function rememberConfig(doc) {
+  if (doc) Object.assign(memoryConfig, doc);
+  configLoadedAt = Date.now();
+}
+
 async function getConfig() {
   if (isDbReady()) {
-    const doc = await RobotConfigModel.findOneAndUpdate(
-      { configId: DEFAULT_CONFIG.configId },
-      { $setOnInsert: DEFAULT_CONFIG },
-      { upsert: true, new: true, lean: true }
-    );
-    Object.assign(memoryConfig, doc);
-    return { ...doc };
+    if (configLoadedAt > 0 && Date.now() - configLoadedAt < SETTINGS_CACHE_MS) {
+      return { ...DEFAULT_CONFIG, ...memoryConfig };
+    }
+    let doc = await RobotConfigModel.findOne({
+      configId: DEFAULT_CONFIG.configId,
+    }).lean();
+    if (!doc) {
+      doc = await RobotConfigModel.findOneAndUpdate(
+        { configId: DEFAULT_CONFIG.configId },
+        { $setOnInsert: DEFAULT_CONFIG },
+        { upsert: true, new: true, lean: true }
+      );
+    }
+    rememberConfig(doc);
+    return { ...DEFAULT_CONFIG, ...memoryConfig };
   }
 
   return { ...DEFAULT_CONFIG, ...memoryConfig };
@@ -62,7 +78,7 @@ async function updateConfig(patch = {}) {
       { $set: merged },
       { upsert: true, new: true, lean: true }
     );
-    Object.assign(memoryConfig, doc);
+    rememberConfig(doc);
     return { ...doc };
   }
 
@@ -101,7 +117,7 @@ async function topupBank(amount) {
       { $inc: { bankBalance: v } },
       { upsert: true, new: true, lean: true }
     );
-    Object.assign(memoryConfig, doc);
+    rememberConfig(doc);
     return doc;
   }
 
@@ -142,7 +158,7 @@ async function deductBank(amount) {
       { upsert: true, new: true, lean: true }
     );
     if (!doc) return { ok: false, error: 'insufficient_bank_balance' };
-    Object.assign(memoryConfig, doc);
+    rememberConfig(doc);
     return { ok: true, bankBalance: doc.bankBalance };
   }
 

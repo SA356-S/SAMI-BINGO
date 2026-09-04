@@ -63,15 +63,25 @@ function StatPill({ label, value }: { label: string; value: number }) {
 
 function ScreenshotPreview({
   requestId,
+  screenshotAvailable,
+  hadReceipt,
   onOpen,
 }: {
   requestId: string;
+  screenshotAvailable: boolean;
+  hadReceipt: boolean;
   onOpen: (src: string) => void;
 }) {
   const [src, setSrc] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (!screenshotAvailable) {
+      setSrc('');
+      setError('');
+      return;
+    }
+
     let cancelled = false;
     let objectUrl = '';
 
@@ -95,7 +105,17 @@ function ScreenshotPreview({
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [requestId]);
+  }, [requestId, screenshotAvailable]);
+
+  if (!screenshotAvailable) {
+    return (
+      <p className="text-xs text-slate-400">
+        {hadReceipt
+          ? 'Receipt was submitted. Image cleared after review.'
+          : 'No receipt image.'}
+      </p>
+    );
+  }
 
   if (error) {
     return <p className="text-xs text-red-300">{error}</p>;
@@ -227,7 +247,12 @@ function RequestRow({
         </div>
 
         <div className="w-full shrink-0 lg:w-64">
-          <ScreenshotPreview requestId={row.id} onOpen={onOpenScreenshot} />
+          <ScreenshotPreview
+            requestId={row.id}
+            screenshotAvailable={Boolean(row.screenshotAvailable || row.screenshotUrl)}
+            hadReceipt={Boolean(row.hadReceipt || row.screenshotAvailable || row.screenshotUrl)}
+            onOpen={onOpenScreenshot}
+          />
         </div>
       </div>
     </div>

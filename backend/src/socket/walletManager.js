@@ -5,6 +5,10 @@ const {
 } = require('../config/constants');
 
 const { resolveTelegramUserId, isValidTelegramId } = require('../utils/telegramAuth');
+const VERBOSE_GAME_LOGS = process.env.DEBUG_GAME === 'true';
+function logLobbyDiag(...args) {
+  if (VERBOSE_GAME_LOGS) console.info(...args);
+}
 const {
   isDbReady,
   loadWalletFromDb,
@@ -579,7 +583,7 @@ function chargeAndStartSession(session, io, options = {}) {
       prizePool: target.prizePool,
       gameId: target.gameId,
     };
-    console.info('[lobby-diag] chargeAndStartSession RETURN', {
+    logLobbyDiag('[lobby-diag] chargeAndStartSession RETURN', {
       path: 'already_calling_with_draw_timer',
       result,
       ...cartelaDiag,
@@ -612,7 +616,7 @@ function chargeAndStartSession(session, io, options = {}) {
 
     if (!canStart) {
       const result = { ok: false, error: 'Cannot start game yet' };
-      console.info('[lobby-diag] chargeAndStartSession RETURN', {
+      logLobbyDiag('[lobby-diag] chargeAndStartSession RETURN', {
         path: 'cannot_start_yet',
         forceStart,
         hasReadyCartels,
@@ -626,7 +630,7 @@ function chargeAndStartSession(session, io, options = {}) {
 
     const charge = chargeSessionEntryStakes(target, io);
     if (!charge.ok) {
-      console.info('[lobby-diag] chargeAndStartSession RETURN', {
+      logLobbyDiag('[lobby-diag] chargeAndStartSession RETURN', {
         path: 'charge_session_entry_stakes_failed',
         charge,
         ...cartelaDiag,
@@ -637,7 +641,7 @@ function chargeAndStartSession(session, io, options = {}) {
     const started = target.startCalling(io, options);
     if (!started?.ok) {
       const result = { ok: false, error: started?.error ?? 'Failed to start ball caller' };
-      console.info('[lobby-diag] chargeAndStartSession RETURN', {
+      logLobbyDiag('[lobby-diag] chargeAndStartSession RETURN', {
         path: 'start_calling_failed',
         started,
         chargeOk: charge.ok,
@@ -664,7 +668,7 @@ function chargeAndStartSession(session, io, options = {}) {
       gameId: target.gameId,
       alreadyRunning: started?.alreadyRunning,
     };
-    console.info('[lobby-diag] chargeAndStartSession RETURN', {
+    logLobbyDiag('[lobby-diag] chargeAndStartSession RETURN', {
       path: 'success',
       result: {
         ok: result.ok,

@@ -78,17 +78,22 @@ async function getOrInitProfile(userId, extras = {}) {
   const phoneFromExtras = extras.phone ?? extras.telegramPhone;
 
   if (isDbReady()) {
-    let doc = await UserProfileModel.findOneAndUpdate(
-      { userId: key },
-      {
-        $setOnInsert: defaultProfile(key, extras),
-      },
-      { upsert: true, new: true, lean: true }
-    );
+    let doc = await UserProfileModel.findOne({ userId: key }).lean();
+    if (!doc) {
+      doc = await UserProfileModel.findOneAndUpdate(
+        { userId: key },
+        { $setOnInsert: defaultProfile(key, extras) },
+        { upsert: true, new: true, lean: true }
+      );
+    }
 
     const updates = {};
-    if (phoneFromExtras) updates.phone = String(phoneFromExtras);
-    if (extras.displayName) updates.displayName = String(extras.displayName);
+    if (phoneFromExtras && String(doc.phone || '') !== String(phoneFromExtras)) {
+      updates.phone = String(phoneFromExtras);
+    }
+    if (extras.displayName && String(doc.displayName || '') !== String(extras.displayName)) {
+      updates.displayName = String(extras.displayName);
+    }
 
     if (Object.keys(updates).length > 0) {
       doc = await UserProfileModel.findOneAndUpdate(
