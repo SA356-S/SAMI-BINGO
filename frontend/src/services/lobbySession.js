@@ -7,6 +7,7 @@ import {
   buildMainGameEntryState,
   isLobbyGameStarted,
 } from '../utils/mainGameEntry';
+import { isLobbySelectionFrozen, LOBBY_SELECTION_LOCK_REMAINING_SEC } from '../utils/lobbySelectionLock';
 import {
   canAutoNavigateToMainGame,
   isMainGameAutoEntryBlocked,
@@ -59,8 +60,12 @@ let localSelectionDirty = false;
 let gameStartNavigateDone = false;
 let lastNotifyFingerprint = '';
 let lastLocalCountdownRemaining = null;
+let lastZeroLobbySyncAt = 0;
+let lastMainGameNavigateAt = 0;
 
 const GAME_ENTRY_STAKE = 10;
+const ZERO_LOBBY_SYNC_INTERVAL_MS = 1000;
+const MAIN_GAME_NAVIGATE_COOLDOWN_MS = 400;
 
 function releaseMainGameAutoEntryIfIdle() {
   if (!isMainGameAutoEntryBlocked()) return;
@@ -85,14 +90,26 @@ function maybeNavigateToMainGame() {
     logLobbyDiag('maybeNavigateToMainGame BLOCKED', { reason: 'no_navigate_ref' });
     return;
   }
-  if (gameStartNavigateDone) {
-    logLobbyDiag('maybeNavigateToMainGame BLOCKED', { reason: 'game_start_navigate_done' });
+
+  const path = currentAppPath();
+  if (path === '/main-game' || path === '/game-75-ball') {
+    gameStartNavigateDone = true;
     return;
   }
+
   if (isStartupHomeRoute()) {
     logLobbyDiag('maybeNavigateToMainGame BLOCKED', { reason: 'startup_home_route' });
     return;
   }
+
+  if (path !== '/card-selection') {
+    logLobbyDiag('maybeNavigateToMainGame BLOCKED', {
+      reason: 'not_card_selection_route',
+      path,
+    });
+    return;
+  }
+
   if (!canAutoNavigateToMainGame()) {
     logLobbyDiag('maybeNavigateToMainGame BLOCKED', {
       reason: 'can_auto_navigate_false',
@@ -105,8 +122,14 @@ function maybeNavigateToMainGame() {
     return;
   }
 
+  const now = Date.now();
+  if (now - lastMainGameNavigateAt < MAIN_GAME_NAVIGATE_COOLDOWN_MS) {
+    return;
+  }
+
   logLobbyDiag('maybeNavigateToMainGame NAVIGATING', { to: '/main-game' });
   gameStartNavigateDone = true;
+  lastMainGameNavigateAt = now;
   void unlockGameAudio();
   navigateRef('/main-game', {
     replace: true,
@@ -168,17 +191,22 @@ function notify(force = false) {
 }
 
 export function getLobbyState() {
+  const remaining = getCountdownRemaining();
+  const selectionLocked = isLobbySelectionFrozen(remaining, {
+    selectionLocked: state.selectionLocked,
+    gameInProgress: state.gameInProgress || isLobbyGameStarted(state),
+  });
   return {
     selectedCartels: [...state.selectedCartels],
     gameId: state.gameId,
-    countdownSeconds: getCountdownRemaining(),
+    countdownSeconds: remaining,
     countdownEndsAt: state.countdownEndsAt,
     takenCartels: new Set(state.takenCartels),
     cartelOwnership: { ...state.cartelOwnership },
     playersCount: state.playersCount,
     lobbyPhase: state.lobbyPhase,
     gameStatus: state.gameStatus,
-    selectionLocked: state.selectionLocked,
+    selectionLocked,
     gameInProgress: state.gameInProgress,
   };
 }
@@ -240,6 +268,22 @@ function applyLobbyRevisionFromPayload(payload) {
   if (incoming != null && incoming >= state.lobbyRevision) {
     state.lobbyRevision = incoming;
   }
+}
+
+function applyDerivedSelectionLock() {
+  if (isLobbyGameStarted(state)) {
+    state.selectionLocked = true;
+    return;
+  }
+  if (getCountdownRemaining() <= LOBBY_SELECTION_LOCK_REMAINING_SEC) {
+    state.selectionLocked = true;
+    return;
+  }
+  if (state.gameInProgress) {
+    state.selectionLocked = true;
+    return;
+  }
+  state.selectionLocked = false;
 }
 
 function applyServerTime(payload) {
@@ -457,12 +501,16 @@ export function applyLobbyPayload(
     state.gameInProgress = true;
   }
   if (payload.status === 'waiting' && !payload.selectionLocked) {
-    state.selectionLocked = false;
-    state.gameInProgress = false;
-    releaseMainGameAutoEntryIfIdle();
+    if (!isLobbySelectionFrozen(getCountdownRemaining()) && !isLobbyGameStarted(state)) {
+      state.selectionLocked = false;
+      state.gameInProgress = false;
+      releaseMainGameAutoEntryIfIdle();
+    }
   }
 
   state.gameStatus = normalizeGameStatus(payload);
+
+  applyDerivedSelectionLock();
 
   const serverSaysGameStarted = isLobbyGameStarted({
     gameInProgress: payload.gameInProgress,
@@ -470,33 +518,10 @@ export function applyLobbyPayload(
     gameStatus: payload.gameStatus ?? payload.status,
   });
 
-  if (isMainGameAutoEntryBlocked() && isLobbyGameStarted(state)) {
-    logLobbyDiag('blockAutoEntry SUPPRESSED game-started client state', {
-      serverSaysGameStarted,
-      payloadStatus: payload.status,
-      payloadLobbyPhase: payload.lobbyPhase ?? payload.phase,
-      payloadGameInProgress: payload.gameInProgress,
-      beforeGameInProgress: state.gameInProgress,
-      beforeLobbyPhase: state.lobbyPhase,
-    });
-    state.gameInProgress = false;
-    state.gameStatus = 'WAITING';
-    state.selectionLocked = false;
-    if (state.lobbyPhase === 'GAME_STARTED') {
-      state.lobbyPhase = 'COUNTDOWN_RUNNING';
-    }
-  }
-
   notify();
 
-  if (isLobbyGameStarted(state)) {
+  if (isLobbyGameStarted(state) || serverSaysGameStarted) {
     maybeNavigateToMainGame();
-  } else if (serverSaysGameStarted && isMainGameAutoEntryBlocked()) {
-    logLobbyDiag('blockAutoEntry prevented navigation despite server game start', {
-      serverSaysGameStarted,
-      payloadGameId: payload.gameId,
-      payloadStatus: payload.status,
-    });
   }
 }
 
@@ -527,24 +552,44 @@ function syncSelectionToServer() {
 
     if (!ack || ack.ok === false) {
       console.warn('[cartel] reservation failed', ack?.error ?? ack);
-      if (ack?.error === 'insufficient_balance') {
+      if (
+        ack?.error === 'insufficient_balance' ||
+        ack?.error === 'selection_closed' ||
+        ack?.error === 'game_in_progress'
+      ) {
         if (!isStaleLobbyRevision(ack)) {
           applyLobbyRevisionFromPayload(ack);
           const restored = ack.myCartels ?? ack.selectedCartels ?? [];
-          state.selectedCartels = Array.isArray(restored)
-            ? restored.map(Number).filter((n) => n >= 1)
-            : [];
-          pendingReleaseCartels.clear();
-          localSelectionDirty = false;
-          for (const id of state.selectedCartels) {
-            pendingReleaseCartels.delete(id);
+          if (
+            Array.isArray(restored) &&
+            (restored.length > 0 ||
+              ack?.error === 'selection_closed' ||
+              ack?.error === 'game_in_progress' ||
+              ack?.error === 'insufficient_balance')
+          ) {
+            state.selectedCartels = Array.isArray(restored)
+              ? restored.map(Number).filter((n) => n >= 1)
+              : [];
+            pendingReleaseCartels.clear();
+            localSelectionDirty = false;
+            for (const id of state.selectedCartels) {
+              pendingReleaseCartels.delete(id);
+            }
           }
         }
       }
-      if (ack?.selectionLocked || ack?.error === 'game_in_progress') {
+      if (
+        ack?.selectionLocked ||
+        ack?.error === 'game_in_progress' ||
+        ack?.error === 'selection_closed'
+      ) {
         state.selectionLocked = true;
-        state.gameInProgress = true;
+        if (ack?.error === 'game_in_progress' || ack?.gameInProgress) {
+          state.gameInProgress = true;
+        }
         state.gameStatus = normalizeGameStatus(ack);
+        applyDerivedSelectionLock();
+        maybeNavigateToMainGame();
       }
       notify();
       return;
@@ -606,7 +651,12 @@ function syncSelectionToServer() {
 }
 
 export function updateSelectedCartels(cartels) {
-  if (state.selectionLocked || state.gameInProgress) {
+  if (
+    isLobbySelectionFrozen(getCountdownRemaining(), {
+      selectionLocked: state.selectionLocked,
+      gameInProgress: state.gameInProgress,
+    })
+  ) {
     notify();
     return;
   }
@@ -635,7 +685,12 @@ export function toggleCartelSelection(
     return { ok: false, reason: 'invalid' };
   }
 
-  if (state.selectionLocked || state.gameInProgress) {
+  if (
+    isLobbySelectionFrozen(getCountdownRemaining(), {
+      selectionLocked: state.selectionLocked,
+      gameInProgress: state.gameInProgress,
+    })
+  ) {
     return { ok: false, reason: 'locked' };
   }
 
@@ -698,10 +753,25 @@ async function refreshFromApi({ replace = false } = {}) {
   );
 }
 
+function requestLobbySync(reason = 'unspecified') {
+  const socket = getSocket();
+  const userId = activeUserId();
+  if (!socket.connected || !userId) return false;
+  logLobbyDiag('requestLobbySync', { reason });
+  socket.emit('game:lobby-sync', { userId, telegramId: userId }, (ack) => {
+    if (ack?.ok !== false) {
+      applyLobbyPayload(ack, { mergeCartels: true, mergeTaken: true });
+    }
+  });
+  return true;
+}
+
 function onLocalCountdownTick() {
   const remaining = getCountdownRemaining();
   const countdownChanged = remaining !== lastLocalCountdownRemaining;
   lastLocalCountdownRemaining = remaining;
+
+  applyDerivedSelectionLock();
 
   if (state.lastLoggedRemaining !== remaining) {
     if (remaining % 5 === 0 || remaining <= 5 || state.lastLoggedRemaining == null) {
@@ -710,22 +780,21 @@ function onLocalCountdownTick() {
     state.lastLoggedRemaining = remaining;
   }
 
-  if (
-    remaining <= 0 &&
-    state.countdownEndsAt != null &&
-    !state.countdownExpiredSignaled
-  ) {
-    state.countdownExpiredSignaled = true;
-    logCountdown('reached-zero');
-    logLobbyDiag('client countdown reached zero — emitting game:lobby-sync', {});
-
-    const socket = getSocket();
-    const userId = activeUserId();
-    if (socket.connected) {
-      socket.emit('game:lobby-sync', { userId, telegramId: userId });
+  if (remaining <= 0 && state.countdownEndsAt != null) {
+    if (isLobbyGameStarted(state)) {
+      maybeNavigateToMainGame();
+    } else {
+      const now = Date.now();
+      if (now - lastZeroLobbySyncAt >= ZERO_LOBBY_SYNC_INTERVAL_MS) {
+        lastZeroLobbySyncAt = now;
+        state.countdownExpiredSignaled = true;
+        logCountdown('reached-zero');
+        requestLobbySync('client_countdown_zero');
+      }
     }
   } else if (remaining > 0) {
     state.countdownExpiredSignaled = false;
+    lastZeroLobbySyncAt = 0;
   }
 
   if (countdownChanged) {
@@ -883,6 +952,8 @@ export function resetLobbySessionState() {
   state.lobbyRevision = 0;
   lastNotifyFingerprint = '';
   lastLocalCountdownRemaining = null;
+  lastZeroLobbySyncAt = 0;
+  lastMainGameNavigateAt = 0;
   notify(true);
 }
 

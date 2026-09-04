@@ -11,6 +11,7 @@ import {
   toggleCartelSelection,
   applyLobbyPayload,
 } from '../services/lobbySession';
+import { LOBBY_SELECTION_LOCK_REMAINING_SEC } from '../utils/lobbySelectionLock';
 import { getPlayerUserId, initTelegramWebApp } from '../api/playerIdentity';
 import {
   bindAudioUnlockOnInteraction,
@@ -61,18 +62,20 @@ function MetricBox({ label, value, isTimer = false, urgent = false }) {
   );
 }
 
-const CartelButton = memo(function CartelButton({ num, status, onToggle }) {
+const CartelButton = memo(function CartelButton({ num, status, onToggle, locked }) {
   const base =
     'flex h-[clamp(24px,6.5vw,28px)] w-full min-w-0 touch-manipulation items-center justify-center rounded-md border text-[clamp(11px,3.2vw,13px)] font-bold leading-none tabular-nums transition';
 
   let className = `${base} border-white/10 bg-[#151b2e] text-white hover:border-white/20 active:scale-95`;
-  let disabled = false;
+  let disabled = Boolean(locked);
 
   if (status === 'mine') {
     className = `${base} border-green-400 bg-green-500 text-white shadow-[0_0_10px_rgba(34,197,94,0.55)]`;
   } else if (status === 'taken') {
     className = `${base} cursor-not-allowed border-orange-400 bg-orange-500 text-white shadow-[0_0_8px_rgba(249,115,22,0.45)] opacity-95`;
     disabled = true;
+  } else if (locked) {
+    className = `${base} cursor-not-allowed border-white/10 bg-[#151b2e] text-white/50`;
   }
 
   return (
@@ -148,6 +151,7 @@ const CartelGridRow = memo(function CartelGridRow({
   selectedSet,
   takenSet,
   onToggle,
+  locked,
 }) {
   return (
     <div className="contents">
@@ -163,6 +167,7 @@ const CartelGridRow = memo(function CartelGridRow({
             num={num}
             status={status}
             onToggle={onToggle}
+            locked={locked}
           />
         );
       })}
@@ -189,7 +194,9 @@ export default function CardSelection() {
   const selectedCartels = lobbySelection.selectedCartels;
   const otherTakenCartels = lobbySelection.takenCartels;
   const selectionLocked =
-    lobbySelection.selectionLocked || lobbySelection.gameInProgress;
+    lobbySelection.selectionLocked ||
+    lobbySelection.gameInProgress ||
+    timer <= LOBBY_SELECTION_LOCK_REMAINING_SEC;
   const gameId = lobbySelection.gameId;
 
   const selectedSet = useMemo(
@@ -379,6 +386,7 @@ export default function CardSelection() {
                 selectedSet={selectedSet}
                 takenSet={otherTakenCartels}
                 onToggle={toggleCartel}
+                locked={selectionLocked}
               />
             ))}
           </div>

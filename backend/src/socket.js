@@ -575,8 +575,17 @@ function registerSocketHandlers(io) {
       );
 
       if (!result.ok) {
-        if (typeof ack === 'function') ack({ ok: false, error: result.error });
-        socket.emit('game:error', { ok: false, error: result.error });
+        const err = {
+          ok: false,
+          error: result.error,
+          selectionLocked: Boolean(result.selectionLocked || session.isSelectionLocked()),
+          myCartels: result.myCartels,
+          selectedCartels: result.selectedCartels ?? result.myCartels,
+          message: result.message,
+          ...session.toLobbySyncPayload(selectUserId),
+        };
+        if (typeof ack === 'function') ack(err);
+        socket.emit('game:error', err);
         return;
       }
 
@@ -631,7 +640,7 @@ function registerSocketHandlers(io) {
       const selectionLocked = session.isSelectionLocked();
       const myCartels = session.getCartelsForUser(syncUserId);
 
-      if (selectionLocked && myCartels.length === 0) {
+      if (session.isGamePlayLocked() && myCartels.length === 0) {
         const watchState = session.toPublicState(socket.id, syncUserId);
         const watchPayload = {
           ok: true,
@@ -1003,7 +1012,7 @@ function registerSocketHandlers(io) {
         return;
       }
 
-      if (lobby.isSelectionLocked() && lobbyCartels.length === 0) {
+      if (lobby.isGamePlayLocked() && lobbyCartels.length === 0) {
         socket.join(lobby.roomName);
         socket.data.gameId = lobby.gameId;
         socket.data.watchingOnly = true;

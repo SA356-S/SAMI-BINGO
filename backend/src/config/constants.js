@@ -26,6 +26,9 @@ const ROUND_END_DISPLAY_MS = 6000;
 /** Global card-selection lobby countdown (seconds) */
 const LOBBY_COUNTDOWN_SEC = 45;
 
+/** Human cartela select/release closes when this many seconds (or fewer) remain. */
+const LOBBY_SELECTION_LOCK_REMAINING_SEC = 3;
+
 /** Lobby phases before/during synchronized game start */
 const LOBBY_PHASE = {
   WAITING: 'WAITING',
@@ -45,5 +48,6 @@ module.exports = {
   ID_CHARS,
   ROUND_END_DISPLAY_MS,
   LOBBY_COUNTDOWN_SEC,
+  LOBBY_SELECTION_LOCK_REMAINING_SEC,
   LOBBY_PHASE,
 };

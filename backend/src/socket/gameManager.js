@@ -25,6 +25,7 @@ const {
   ID_CHARS,
   ROUND_END_DISPLAY_MS,
   LOBBY_PHASE,
+  LOBBY_SELECTION_LOCK_REMAINING_SEC,
 } = require('../config/constants');
 
 /**
@@ -97,9 +98,9 @@ class GameSession {
     this._roomStateEpoch = 0;
     this._cachedPublicGameStatus = null;
     this._cachedPublicGameStatusKey = null;
-    /** Per-second lobby core fields reused across tick payloads */
+    /** Lobby core fields reused while remaining/phase/epoch are unchanged */
     this._roomLobbyCoreCache = null;
-    this._roomLobbyCoreTick = -1;
+    this._roomLobbyCoreCacheKey = '';
     this._lastBallEmitSequence = 0;
   }
 
@@ -116,7 +117,7 @@ class GameSession {
     this._totalCartelsCache = null;
     this._takenCartelsArrayCache = null;
     this._roomLobbyCoreCache = null;
-    this._roomLobbyCoreTick = -1;
+    this._roomLobbyCoreCacheKey = '';
     this._cachedPublicGameStatus = null;
     this._cachedPublicGameStatusKey = null;
     clearRoomBroadcastCache(this._roomBroadcastCache);
@@ -257,14 +258,30 @@ class GameSession {
     return this.hasMinimumCartelasToStart();
   }
 
-  /** True when cartela picking is closed (game running or finished). */
-  isSelectionLocked() {
+  /** True when the round has left Card Selection (calling / ended / started). */
+  isGamePlayLocked() {
     return (
       this.status === 'calling' ||
       this.status === 'ended' ||
       this.status === 'finished' ||
       this.lobbyPhase === LOBBY_PHASE.GAME_STARTED
     );
+  }
+
+  /**
+   * Final 3 seconds of the lobby countdown — human select/release is closed.
+   * Robots keep their existing pre-start seating path.
+   */
+  isLobbySelectionFrozen() {
+    return (
+      this.status === 'waiting' &&
+      this.getLobbyCountdownRemaining() <= LOBBY_SELECTION_LOCK_REMAINING_SEC
+    );
+  }
+
+  /** True when cartela picking is closed for human clients. */
+  isSelectionLocked() {
+    return this.isGamePlayLocked() || this.isLobbySelectionFrozen();
   }
 
   /** Public phase for clients: WAITING | RUNNING | FINISHED */
@@ -282,20 +299,21 @@ class GameSession {
     return value;
   }
 
-  /** Shared lobby fields rebuilt at most once per wall-clock second. */
+  /** Shared lobby fields rebuilt when countdown remaining or room epoch changes. */
   _getRoomLobbyCore() {
-    const tick = Math.floor(Date.now() / 1000);
-    if (this._roomLobbyCoreCache && this._roomLobbyCoreTick === tick) {
+    const remaining = this.getLobbyCountdownRemaining();
+    const cacheKey = `${this._roomStateEpoch}:${this.status}:${this.lobbyPhase}:${remaining}`;
+    if (this._roomLobbyCoreCache && this._roomLobbyCoreCacheKey === cacheKey) {
       return this._roomLobbyCoreCache;
     }
-    this._roomLobbyCoreTick = tick;
+    this._roomLobbyCoreCacheKey = cacheKey;
     this._roomLobbyCoreCache = {
       gameId: this.gameId,
       status: this.status,
       gameStatus: this.getPublicGameStatus(),
       lobbyPhase: this.lobbyPhase,
       phase: this.lobbyPhase,
-      countdownSeconds: this.getLobbyCountdownRemaining(),
+      countdownSeconds: remaining,
       countdownEndsAt: this.lobbyCountdownEndsAt,
       serverTime: Date.now(),
       takenCartels: this.getTakenCartelsArray(),
@@ -664,24 +682,48 @@ class GameSession {
   assignCartels(socketId, cartelIds, playerName = 'Player', userId = null) {
     const ids = [...new Set(cartelIds.map(Number))].filter((n) => n >= 1 && n <= 400);
 
-    if (this.isSelectionLocked() && ids.length > 0) {
-      const resolvedUserId =
-        userId != null && userId !== ''
-          ? String(userId)
-          : this.players.get(socketId)?.userId
-            ? String(this.players.get(socketId).userId)
+    const resolvedUserIdEarly =
+      userId != null && userId !== ''
+        ? String(userId)
+        : this.players.get(socketId)?.userId
+          ? String(this.players.get(socketId).userId)
+          : this.awayPlayers.get(String(userId || ''))?.userId
+            ? String(userId)
             : null;
-      const current = resolvedUserId ? this.getCartelsForUser(resolvedUserId) : [];
-      const sameSelection =
-        ids.length === current.length && ids.every((id) => current.includes(id));
-      if (!sameSelection) {
-        return {
-          ok: false,
-          error: 'game_in_progress',
-          selectionLocked: true,
-          message: 'Game already started — cartela selection is closed',
-        };
-      }
+
+    const currentSelection = resolvedUserIdEarly
+      ? this.getCartelsForUser(resolvedUserIdEarly)
+      : this.players.get(socketId)?.cartelIds
+        ? [...this.players.get(socketId).cartelIds]
+        : [];
+    const sameSelection =
+      ids.length === currentSelection.length &&
+      ids.every((id) => currentSelection.includes(id));
+
+    if (this.isGamePlayLocked() && ids.length > 0 && !sameSelection) {
+      return {
+        ok: false,
+        error: 'game_in_progress',
+        selectionLocked: true,
+        myCartels: currentSelection,
+        selectedCartels: currentSelection,
+        message: 'Game already started — cartela selection is closed',
+      };
+    }
+
+    if (
+      this.isLobbySelectionFrozen() &&
+      !GameSession.isRobotUserId(resolvedUserIdEarly) &&
+      !sameSelection
+    ) {
+      return {
+        ok: false,
+        error: 'selection_closed',
+        selectionLocked: true,
+        myCartels: currentSelection,
+        selectedCartels: currentSelection,
+        message: 'Card selection is closed for the final 3 seconds',
+      };
     }
 
     const existing =
@@ -1857,7 +1899,7 @@ class GameSession {
       gameInProgress: this.status === 'calling',
       watchingOnly:
         Boolean(userId) &&
-        this.isSelectionLocked() &&
+        this.isGamePlayLocked() &&
         myCartels.length === 0,
       lobbyRevision: this._roomStateEpoch,
       selectionVersion: this._roomStateEpoch,
@@ -1873,55 +1915,76 @@ class GameSession {
         reason: 'status_not_waiting',
         ...enterDiag,
       });
-      return;
+      return this.status === 'calling' || this.lobbyPhase === LOBBY_PHASE.GAME_STARTED;
     }
 
     try {
-      const { ensureRobotsJoinBeforeRoundStart } = require('../services/robotGameSessionBridge');
-      const { getRuntimeMap } = require('../services/robotEngine');
-      ensureRobotsJoinBeforeRoundStart(io, this, getRuntimeMap());
+      try {
+        const { ensureRobotsJoinBeforeRoundStart } = require('../services/robotGameSessionBridge');
+        const { getRuntimeMap } = require('../services/robotEngine');
+        ensureRobotsJoinBeforeRoundStart(io, this, getRuntimeMap());
+      } catch (err) {
+        console.warn('[lobby] pre-start robot sync failed', err?.message || err);
+        logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired robot-sync-error', {
+          error: err?.message || String(err),
+          ...this._lobbyCartelaDiag(),
+        });
+      }
+
+      const afterRobotDiag = this._lobbyCartelaDiag();
+      logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired after-robot-sync', afterRobotDiag);
+
+      const totalCartelas = afterRobotDiag.totalCartelas;
+      if (totalCartelas >= MIN_TOTAL_CARTELAS_TO_START) {
+        logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired attempting tryStartLobbyGame', {
+          totalCartelas,
+          minRequired: MIN_TOTAL_CARTELAS_TO_START,
+          ...afterRobotDiag,
+        });
+        const started = this.tryStartLobbyGame(io, { fromCountdownExpiry: true });
+        if (started) {
+          logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired SUCCESS → calling/main-game', {
+            ...this._lobbyCartelaDiag(),
+          });
+          return true;
+        }
+        logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired RESTART because tryStartLobbyGame returned false', {
+          restartReason: 'try_start_returned_false',
+          ...this._lobbyCartelaDiag(),
+        });
+        this.restartLobbyCountdownLoop('countdown_expired_try_start_failed');
+        this.emitWaitingLobbyTick(io);
+        return false;
+      }
+
+      logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired RESTART because insufficient total cartelas', {
+        restartReason: 'insufficient_total_cartelas',
+        totalCartelas,
+        minRequired: MIN_TOTAL_CARTELAS_TO_START,
+        humanCartelas: afterRobotDiag.humanCartelas,
+        robotCartelas: afterRobotDiag.robotCartelas,
+        ...afterRobotDiag,
+      });
+      this.restartLobbyCountdownLoop('countdown_expired_insufficient_cartelas');
+      this.emitWaitingLobbyTick(io);
+      return false;
     } catch (err) {
-      console.warn('[lobby] pre-start robot sync failed', err?.message || err);
-      logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired robot-sync-error', {
+      console.warn('[lobby] countdown expiry failed', err?.message || err);
+      logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired ERROR', {
         error: err?.message || String(err),
         ...this._lobbyCartelaDiag(),
       });
-    }
-
-    const afterRobotDiag = this._lobbyCartelaDiag();
-    logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired after-robot-sync', afterRobotDiag);
-
-    const totalCartelas = afterRobotDiag.totalCartelas;
-    if (totalCartelas >= MIN_TOTAL_CARTELAS_TO_START) {
-      logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired attempting tryStartLobbyGame', {
-        totalCartelas,
-        minRequired: MIN_TOTAL_CARTELAS_TO_START,
-        ...afterRobotDiag,
-      });
-      const started = this.tryStartLobbyGame(io, { fromCountdownExpiry: true });
-      if (started) {
-        logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired SUCCESS → calling/main-game', {
-          ...this._lobbyCartelaDiag(),
-        });
-        return;
+      if (this.status === 'waiting') {
+        this.restartLobbyCountdownLoop('countdown_expired_error');
+        this.emitWaitingLobbyTick(io);
       }
-      logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired RESTART because tryStartLobbyGame returned false', {
-        restartReason: 'try_start_returned_false',
-        ...this._lobbyCartelaDiag(),
-      });
-      this.restartLobbyCountdownLoop('countdown_expired_try_start_failed');
-      return;
+      return false;
+    } finally {
+      if (this.status === 'waiting' && this.getLobbyCountdownRemaining() <= 0) {
+        this.restartLobbyCountdownLoop('countdown_expired_stuck_at_zero');
+        this.emitWaitingLobbyTick(io);
+      }
     }
-
-    logLobbyDiag('[lobby-diag] handleLobbyCountdownExpired RESTART because insufficient total cartelas', {
-      restartReason: 'insufficient_total_cartelas',
-      totalCartelas,
-      minRequired: MIN_TOTAL_CARTELAS_TO_START,
-      humanCartelas: afterRobotDiag.humanCartelas,
-      robotCartelas: afterRobotDiag.robotCartelas,
-      ...afterRobotDiag,
-    });
-    this.restartLobbyCountdownLoop('countdown_expired_insufficient_cartelas');
   }
 
   /**
@@ -1932,6 +1995,18 @@ class GameSession {
     const diag = this._lobbyCartelaDiag();
     const fromCountdownExpiry = options.fromCountdownExpiry === true;
 
+    if (this.status === 'calling' || this.lobbyPhase === LOBBY_PHASE.GAME_STARTED) {
+      logLobbyDiag('[lobby-diag] tryStartLobbyGame already started — rebroadcast', {
+        fromCountdownExpiry,
+        ...diag,
+      });
+      this.lobbyPhase = LOBBY_PHASE.GAME_STARTED;
+      this.emitLobbyGameStarted(
+        io,
+        this.allSeatedPlayers().filter((p) => this.playerHasAnyCartelas(p))
+      );
+      return true;
+    }
     if (this.status !== 'waiting') {
       logLobbyDiag('[lobby-diag] tryStartLobbyGame RETURN false', {
         path: 'status_not_waiting',
@@ -2171,10 +2246,31 @@ class GameManager {
           session.emitRoomAudio(io, 'countdown_tick', { seconds: remaining });
         }
 
-        if (remaining <= 0 && !session._lobbyExpiredLatch) {
-          session._lobbyExpiredLatch = true;
-          runDeferred(() => session.handleLobbyCountdownExpired(io));
-        } else if (remaining > 0) {
+        if (remaining <= 0) {
+          if (!session._lobbyExpiredLatch) {
+            session._lobbyExpiredLatch = true;
+            runDeferred(() => {
+              try {
+                session.handleLobbyCountdownExpired(io);
+              } catch (err) {
+                console.warn('[lobby] countdown expiry failed', err?.message || err);
+                if (
+                  session.status === 'waiting' &&
+                  session.getLobbyCountdownRemaining() <= 0
+                ) {
+                  session.restartLobbyCountdownLoop('countdown_expired_clock_error');
+                  session.emitWaitingLobbyTick(io);
+                }
+              }
+            });
+          } else if (
+            session.status === 'waiting' &&
+            session.getLobbyCountdownRemaining() <= 0
+          ) {
+            // Previous expiry did not leave waiting-at-0. Recover on the next tick.
+            session.handleLobbyCountdownExpired(io);
+          }
+        } else {
           session._lobbyExpiredLatch = false;
         }
       }
